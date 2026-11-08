@@ -90,12 +90,22 @@ def full_decrypt(source: Path, target: Path, key: bytes) -> int:
             with os.fdopen(fd, "wb") as out:
                 out.write(_decrypt_page(salt + first, 1, enc, mac))
                 pages = 1
+                empty = bytes(PAGE_SIZE)
+                skipped = 0
                 while True:
                     page = inp.read(PAGE_SIZE)
                     if not page:
                         break
                     if len(page) != PAGE_SIZE:
                         raise ValueError("encrypted database has a partial page")
+                    if page == empty:
+                        # 客户端会把文件预分配到 30 MB，尾部的全零页还没用过，没有 HMAC。
+                        # 只放过文件尾部连续的零页；有人把用过的页抹零时，数据库头里记的页数对不上，
+                        # 调用方的 verify_sqlite 会拒绝
+                        skipped += 1
+                        continue
+                    if skipped:
+                        raise ValueError(f"SQLCipher page {pages + skipped + 1} follows empty pages")
                     pages += 1
                     out.write(_decrypt_page(page, pages, enc, mac))
                 out.flush()

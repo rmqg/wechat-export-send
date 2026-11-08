@@ -42,6 +42,45 @@ def test_wrong_key_and_tamper_rejected(tmp_path):
     assert not (tmp_path / "bad.db").exists()
 
 
+def test_preallocated_empty_pages_at_tail_are_skipped(tmp_path):
+    """真实客户端把消息库预分配到 30 MB，尾部全是零页。"""
+    encrypted, key, _ = fixture(tmp_path)
+    real_pages = encrypted.stat().st_size // sqlcipher.PAGE_SIZE
+    with encrypted.open("ab") as stream:
+        stream.write(bytes(sqlcipher.PAGE_SIZE * 50))
+    target = tmp_path / "out.db"
+    assert sqlcipher.full_decrypt(encrypted, target, key) == real_pages
+    assert target.stat().st_size == real_pages * sqlcipher.PAGE_SIZE
+    assert sqlcipher.verify_sqlite(target)
+
+
+def test_page_after_empty_pages_rejected(tmp_path):
+    encrypted, key, _ = fixture(tmp_path)
+    data = encrypted.read_bytes()
+    encrypted.write_bytes(data + bytes(sqlcipher.PAGE_SIZE) + data[-sqlcipher.PAGE_SIZE:])
+    with pytest.raises(ValueError):
+        sqlcipher.full_decrypt(encrypted, tmp_path / "out.db", key)
+
+
+def test_zeroed_used_pages_fail_quick_check(tmp_path):
+    """把用过的页抹成零：数据库头里的页数对不上，快照必须拒绝。"""
+    plain = tmp_path / "plain.db"
+    statements = ["CREATE TABLE t (v TEXT)"] + [f"INSERT INTO t VALUES ('{'x' * 3000}')" for _ in range(20)]
+    synthetic.reserved_sqlite(plain, statements)
+    salt = bytes(range(16))
+    key = sqlcipher.derive_enc_key(b"PUBLIC-TEST", salt)
+    encrypted = tmp_path / "enc.db"
+    sqlcipher.encrypt_sqlite(plain, encrypted, key, salt=salt)
+    data = bytearray(encrypted.read_bytes())
+    pages = len(data) // sqlcipher.PAGE_SIZE
+    assert pages > 5
+    data[(pages - 3) * sqlcipher.PAGE_SIZE:] = bytes(3 * sqlcipher.PAGE_SIZE)
+    encrypted.write_bytes(data)
+    with pytest.raises(RuntimeError):
+        sqlcipher.decrypted_snapshot(encrypted, {"enc_key": key.hex()}, tmp_path / "snap" / "x.db")
+    assert not (tmp_path / "snap" / "x.db").exists()
+
+
 def test_truncated_rejected(tmp_path):
     encrypted, key, _ = fixture(tmp_path)
     encrypted.write_bytes(encrypted.read_bytes()[:5000])
