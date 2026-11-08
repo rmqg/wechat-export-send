@@ -15,10 +15,10 @@
 | 微信 Linux 客户端 | 4.1.13.26，x86_64，deb SHA-256 `a0db8caeee8d1e6cfe0aa5ce58710270f8d74a90ff4920f53a3fc22aa0956fe9`，可执行文件 SHA-256 `2749535f299ba67feb8ef80cab898bb0531fa8f376b16f8a72db706811c84132` | C | 捕获、解密、发送都跑过；两个账号各一个容器 |
 | 宿主（真实账号） | iStoreOS 24.10.8（OpenWrt），Linux 6.6.144，x86_64，Docker 27.3.1，Compose 2.39.1，Python 3.11.14 | C | 只有拆分前的代码在这里跑过 |
 | 拆分前的容器环境 | 基于 Debian 的 selenium 桌面基础镜像，Python 3.12、3.14 | C | 这个仓库已改用自己的 Debian 12 桌面镜像 |
-| 桌面镜像 + 真实客户端 | 见 [VALIDATION.md](VALIDATION.md) 的「真实客户端」一节 | B | 只到登录窗口 |
-| 干净环境 | Debian 12（Python 3.11）、Ubuntu 24.04（Python 3.12），arm64 和 amd64 容器 | A | 宿主是 macOS 上的 OrbStack，amd64 经 Rosetta 转译 |
-| Docker | 29.4.0，Compose 5.1.2 | A、B | OrbStack 带的版本 |
-| Python | 3.10.12（只跑单元测试）、3.11、3.12 | A | |
+| 桌面镜像 + 真实客户端 | Debian 12.15，Xvfb 21.1.7，fluxbox 1.3.5，x11vnc 0.9.16，noVNC 1.3.0；客户端 4.1.13.26 | B | 经 Rosetta 转译。启动到登录窗口、看门狗识别 `offline`、`keys check` 定位到捕获点。没有登录，没有实际捕获 |
+| 干净环境 | Debian 12（Python 3.11.2）、Ubuntu 24.04.5（Python 3.12.3），arm64 和 amd64 容器 | A | 宿主是 macOS 上的 OrbStack，内核 7.0.14，amd64 经 Rosetta 转译 |
+| Docker | Engine 29.4.0，Compose 2.40.3（Ubuntu 24.04 的 `docker-compose-v2`） | B | OrbStack 的引擎 |
+| Python | 3.10.12（只跑不含 X11 的测试）、3.11.2、3.12.3 | A | |
 | 内部依赖 | PyCryptodome 3.23.0，zstandard 0.25.0，Pillow 11.3.0 | A | `requirements.txt` 固定 |
 
 ## 未测试 / 不保证
@@ -32,6 +32,8 @@
 | `compose.selkies.yaml`（外部镜像） | 未测试，只检查过 compose 语法。显示号和窗口布局不同，发送器不能直接用 |
 | `compose.proxy.yaml`（nginx） | 只检查过 compose 语法 |
 | systemd unit、procd 脚本 | 未在真实系统上启用过；procd 脚本由拆分前的同类脚本改写 |
+| 原生 x86_64 宿主上的这个 release 包 | 未测试：amd64 只在 Rosetta 下跑过 |
+| GitHub Actions 工作流、`gh attestation verify` | 未运行：仓库还没有推送 |
 | 其他发行版、内核 | 未测试。Linux 发行版不重要的部分在容器里；要注意 `kernel.yama.ptrace_scope`、硬件断点、虚拟化环境 |
 | Windows、macOS 版微信 | 不支持 |
 | Python 3.13 及以上做宿主 | 未测试 |
