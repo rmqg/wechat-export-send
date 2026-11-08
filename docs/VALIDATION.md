@@ -13,10 +13,10 @@
 
 | 镜像 | 架构 | 系统 | Python | 校验 | demo（联网安装后） | demo（无网络、未装依赖） | demo（无网络、已装依赖） | doctor | 测试 |
 |---|---|---|---|---|---|---|---|---|---|
-| `debian:12` | arm64 | Debian 12 | 3.11.2 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 116 passed |
-| `debian:12` | amd64 | Debian 12 | 3.11.2 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 116 passed |
-| `ubuntu:24.04` | arm64 | Ubuntu 24.04.5 | 3.12.3 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 116 passed |
-| `ubuntu:24.04` | amd64 | Ubuntu 24.04.5 | 3.12.3 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 116 passed |
+| `debian:12` | arm64 | Debian 12 | 3.11.2 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 133 passed |
+| `debian:12` | amd64 | Debian 12 | 3.11.2 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 133 passed |
+| `ubuntu:24.04` | arm64 | Ubuntu 24.04.5 | 3.12.3 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 133 passed |
+| `ubuntu:24.04` | amd64 | Ubuntu 24.04.5 | 3.12.3 | OK | 12/12 | 通过 | 12/12 | 退出码 0 | 133 passed |
 
 命令：
 
@@ -39,13 +39,15 @@ apt-get install -y python3-tk xvfb fluxbox libx11-6 libxtst6 libsqlite3-0
 FAKE_PYTHON=/usr/bin/python3 .venv/bin/python -m pytest -q
 ```
 
-这 116 项里包括：
+这 133 项里包括：
 
-- 9 项假微信端到端（`tests/test_send_x11.py`）：真 Xvfb、真 fluxbox、假微信窗口、合成加密库。发送并确认、同一个 request-id 不重发、dry-run 不点发送、点了但确认不到报 `unknown` 且之后不重发、已有草稿报 `failed` 且不动草稿、点错会话在点发送之前报 `failed`、未校准报 `failed`、窗口漂移恢复后发送、图片发送。
+- 12 项假微信端到端（`tests/test_send_x11.py`）：真 Xvfb、真 fluxbox、假微信窗口、合成加密库。发送并确认、同一个 request-id 不重发、dry-run 不点发送、点了但确认不到报 `unknown` 且之后不重发、已有草稿报 `failed` 且不动草稿、点错会话在点发送之前报 `failed`、未校准报 `failed`、窗口漂移恢复后发送、图片发送、空白标题不存模板、`--calibrate --current`、已打开时不再搜索。
 - 3 项真 X11 剪贴板传输（`tests/test_clipboard_incr.py`）：2 MB 单次写入、约 17 MB 和 40 MB 走 INCR，字节完全一致。
 - 其余是解密（含 WAL、错误密钥、篡改）、解析、媒体、增量导出（含撤回、等服务器 ID、待取图片、残缺行修复）、发送状态语义、看门狗、取原图协议、媒体服务、CLI 和 doctor。
 
 另外在 2080 这台机器（Ubuntu 22.04，Python 3.10.12）上跑了不含 X11 的部分，全部通过。
+
+测试过程中有两次 `test_image_sent` 在 Mac 负载较高时失败，当时没有留下具体原因；之后放宽了测试里的等待时间，并让矩阵打印完整的失败原因，再跑没有复现。怀疑是超时，没有证实。
 
 ## 二、默认的 docker 发送路径（假微信）
 
