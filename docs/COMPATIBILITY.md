@@ -7,7 +7,7 @@
 - **C 层：拆分前的代码**，同一套捕获、解密和 X11 发送逻辑在真实账号上长期运行。
 - **D 层：这个 release 对接真实账号。** 用 `instance attach` 对接一个已登录的容器，导出后用 `verify-export` 核对，数据库行数和导出条数完全一致。
 
-**`wechat-send` 还没有在真实账号上完成过一次发送。** 真实客户端上校准和窗口操作跑过，发现并修了几个问题。如果你是第一个用它发真消息的人，先用 `--dry-run`，并用文件传输助手或一个自己的小群试。
+`wechat-send` 在真实账号上往文件传输助手发过文字和图片，并直接查库核对过。**经搜索选中会话这条路径，重构后还没有在真实群上跑过**：同样的坐标和步骤在拆分前的代码里长期运行，但第一次用的时候请先 `--dry-run`。
 
 ## 实测通过
 
@@ -16,7 +16,8 @@
 | 微信 Linux 客户端 | 4.1.13.26，x86_64，deb SHA-256 `a0db8caeee8d1e6cfe0aa5ce58710270f8d74a90ff4920f53a3fc22aa0956fe9`，可执行文件 SHA-256 `2749535f299ba67feb8ef80cab898bb0531fa8f376b16f8a72db706811c84132` | C | 捕获、解密、发送都跑过；两个账号各一个容器 |
 | 宿主（真实账号） | iStoreOS 24.10.8（OpenWrt），Linux 6.6.144，x86_64，Docker 27.3.1，Compose 2.39.1，Python 3.11.14 | C | 只有拆分前的代码在这里跑过 |
 | 拆分前的容器环境 | 基于 Debian 的 selenium 桌面基础镜像，Python 3.12、3.14 | C | 这个仓库已改用自己的 Debian 12 桌面镜像 |
-| 导出、核对（真实账号） | 微信 4.1.13.26，iStoreOS 24.10.8，Docker 27.3.1，工具容器（无网络，内存上限 1 GB） | D | `instance attach`、`export --container`、`verify-export` |
+| 导出、核对（真实账号） | 微信 4.1.13.26，iStoreOS 24.10.8，Docker 27.3.1，工具容器（无网络，内存上限 1 GB） | D | `instance attach`、`export --container`、`verify-export`，两个账号 |
+| 发送（真实账号） | 同上，worker 在工具容器里 | D | 文字、图片、幂等，目标是已打开的文件传输助手（`--calibrate --current`） |
 | 桌面镜像 + 真实客户端 | Debian 12.15，Xvfb 21.1.7，fluxbox 1.3.5，x11vnc 0.9.16，noVNC 1.3.0；客户端 4.1.13.26 | B | 经 Rosetta 转译。启动到登录窗口、看门狗识别 `offline`、`keys check` 定位到捕获点。没有登录，没有实际捕获 |
 | 干净环境 | Debian 12（Python 3.11.2）、Ubuntu 24.04.5（Python 3.12.3），arm64 和 amd64 容器 | A | 宿主是 macOS 上的 OrbStack，内核 7.0.14，amd64 经 Rosetta 转译 |
 | Docker | Engine 29.4.0，Compose 2.40.3（Ubuntu 24.04 的 `docker-compose-v2`） | B | OrbStack 的引擎 |
@@ -27,7 +28,7 @@
 
 | 项目 | 状态 |
 |---|---|
-| `wechat-send` 在真实账号上完成发送 | **未完成** |
+| `wechat-send` 经搜索选中会话、往真实群发送 | **未测试**（拆分前的同类代码跑过） |
 | `keys capture`、`fetch-originals` 连真实账号 | **未测试**（拆分前的同类代码跑过） |
 | 其他微信版本（4.1.13.26 之外） | 未测试。捕获点会按二进制重新计算，可能能用；界面坐标、表结构可能要改 |
 | 微信 4.0 及更早 | 未测试 |

@@ -134,13 +134,26 @@ doctor 的 3 项警告都符合预期：架构是 aarch64；还没有账号目�
 | 校准存下空白模板 | 第一条搜索结果可能是网页搜索，没打开会话 | 拒绝空白模板 |
 | 探针按 Esc 后主窗口消失 | 客户端把主窗口收起来 | 程序不按 Esc，文档写明唤醒方法 |
 
-发送：校准和窗口操作跑过，**还没有完成一次真实发送**。这个账号的搜索不返回文件传输助手，需要先在 noVNC 里把它打开（`--calibrate --current`）。
+发送：这个账号的搜索不返回文件传输助手，先在 noVNC 里把它打开，然后往文件传输助手发送。发送前后用独立脚本直接读解密快照核对：
+
+```sh
+./bin/wechat-send --instance verify2 --to 文件传输助手 --calibrate --current --json   # calibrated；标题裁图人工确认
+./bin/wechat-send ... --text ... --dry-run --json                                      # dry_run，数据库没有新行
+./bin/wechat-send ... --text ... --request-id r1 --json                                # sent，退出码 0
+./bin/wechat-send ... --text ... --request-id r1 --json                                # sent，「没有重发」，数据库没有新行
+./bin/wechat-send ... --text 别的 --request-id r1 --json                               # invalid，退出码 3
+./bin/wechat-send ... --image test.png --request-id r2 --json                          # sent，退出码 0
+```
+
+数据库里恰好多了两行：都是自己发的，服务器 ID 和回执一致，文字的 SHA-256 和要发的完全相等。
+
+另一个账号（主账号）只导出、不发送：数据库行数和导出条数一致；和日报系统的来源快照比对同一个 24 小时窗口，快照的消息全部在导出里，时间全部一致，导出多出的只有快照本来就排除的自己发的消息；文字消息的差异全部只在空白（导出保留原样）。
 
 ## 六、没有测的
 
 **这些都没有做，不要当成支持：**
 
-- 真实的 `keys capture`；向真实会话完成发送。拆分前的代码在这些环节跑过，重构后的代码还没有
+- 真实的 `keys capture`；经搜索选中会话后往真实群发送。拆分前的代码在这些环节跑过，重构后的代码还没有
 - 原生 x86_64 宿主上跑这个 release 包（amd64 只经过 Rosetta）
 - `fetch-originals` 连真实 CDN（只用假的 HTTP 响应测过协议和校验）
 - systemd unit 和 procd 脚本实际启用

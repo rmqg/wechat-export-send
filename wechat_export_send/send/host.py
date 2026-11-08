@@ -429,7 +429,8 @@ def main(argv: list[str] | None = None) -> int:
             raise InvalidArguments("--text 不能为空")
         result = send(args)
     except InvalidArguments as exc:
-        request_id, to = "", ""
+        request_id = getattr(args, "request_id", None) or "" if "args" in locals() else ""
+        to = getattr(args, "to", None) or "" if "args" in locals() else ""
         result = _output("invalid", request_id=request_id, to=to, detail=str(exc))
     except ConfigError as exc:
         result = _output("invalid", detail=str(exc))

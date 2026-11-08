@@ -45,6 +45,6 @@
 
 ### 已知的限制
 
-- 导出已在真实账号上核对过条数；`wechat-send` 的完整发送还没有连真实账号跑。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+- 导出已在真实账号上核对过条数；`wechat-send` 只在真实账号上往已打开的文件传输助手发送过，经搜索选中会话的路径重构后还没有在真实群上跑。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 - 语音和视频只导出记录，不导出文件
 - 群昵称是尽力解析

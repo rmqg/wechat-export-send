@@ -152,6 +152,7 @@ def test_request_id_with_different_content_is_invalid(instance, monkeypatch):
     call("--to", "x", "--text", "你好", "--request-id", "c")
     code, result = call("--to", "x", "--text", "别的内容", "--request-id", "c")
     assert code == 3 and result["status"] == "invalid"
+    assert result["to"] == "x" and result["request_id"] == "c"
 
 
 def test_exception_during_worker_is_unknown(instance, monkeypatch):
