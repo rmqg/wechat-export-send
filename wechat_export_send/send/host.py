@@ -390,7 +390,7 @@ def send(args) -> dict:
                 outcome = run_worker(instance, job_dir, timeout=timeout, calibrate=args.calibrate)
 
         status = outcome.get("status", "unknown")
-        extra = {key: outcome[key] for key in ("code", "stage", "receipt") if outcome.get(key)}
+        extra = {key: outcome[key] for key in ("code", "stage", "reason", "receipt") if outcome.get(key)}
         result = _output(status, request_id=request_id, to=to, conversation_id=outcome.get("conversation_id", ""),
                          submitted_at=outcome.get("submitted_at"), detail=outcome.get("detail", ""), extra=extra or None)
         if store is not None:

@@ -209,6 +209,18 @@ def _header_ok(x11_mod, screen, calibration: dict, template: Path) -> bool:
     return ok
 
 
+def _safe_reason(exc: Exception) -> str:
+    """x11.py 自己抛的 RuntimeError 是写死的文字，不含聊天内容，可以带出去；别处的异常一律不带。"""
+    trace = exc.__traceback__
+    last = None
+    while trace is not None:
+        last = trace
+        trace = trace.tb_next
+    if last is not None and isinstance(exc, RuntimeError) and Path(last.tb_frame.f_code.co_filename).name == "x11.py":
+        return str(exc)[:200]
+    return ""
+
+
 def run_job(job_dir: Path) -> dict:
     job_dir = Path(job_dir)
     job = load_json(job_dir / "job.json")
@@ -379,6 +391,9 @@ def run_job(job_dir: Path) -> dict:
         status = "unknown" if progress.submitted else "failed"
         detail = "提交后出错；不要自动重发，请人工查看" if progress.submitted else "提交前出错，确定没有发出去"
         result.update(status=status, stage=progress.stage, code=type(exc).__name__, detail=detail)
+        reason = _safe_reason(exc)
+        if reason:
+            result["reason"] = reason
         return result
     finally:
         result["submitted"] = progress.submitted
