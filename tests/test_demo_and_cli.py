@@ -324,3 +324,27 @@ def test_export_flushes_large_batches(tmp_path, monkeypatch, capsys):
     _, instance = _attached(tmp_path, monkeypatch, capsys)
     assert exporter.export_instance(instance)["new_lines"] == 16
     assert verify.verify_instance(instance)["ok"]
+
+
+def test_integration_doc_snippets_run(tmp_path):
+    """docs/INTEGRATION.md 里的 Python 片段要能在真实的导出目录上跑通，提到的状态和退出码要和代码一致。"""
+    import re
+    from wechat_export_send.send import host
+    result = demo.run(tmp_path / "demo")
+    export = result["output"]
+    manifest = json.loads((Path(export) / "manifest.json").read_text(encoding="utf-8"))
+    conversation = next(item for item in manifest["conversations"] if item["kind"] == "group")
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    snippets = re.findall(r"python3 - <<'EOF'\n(.*?)\nEOF", text, re.S)
+    assert len(snippets) == 2
+    outputs = []
+    for snippet in snippets:
+        done = subprocess.run([sys.executable, "-c", snippet], capture_output=True, text=True, timeout=60,
+                              env={"EXPORT": export, "CONV": conversation["id"], "PATH": os.environ["PATH"]})
+        assert done.returncode == 0, done.stderr
+        outputs.append(done.stdout)
+    assert conversation["id"] in outputs[0]
+    assert outputs[1].startswith(f"{conversation['message_count']} 条，其中别人发的 {conversation['message_count'] - 1} 条")
+    for status, code in host.EXIT_CODES.items():
+        assert re.search(rf"\| `{status}` \| {code} \|", text), status
+    assert (ROOT / "docs" / "CONTRACT.md").is_file() and "(CONTRACT.md)" in text

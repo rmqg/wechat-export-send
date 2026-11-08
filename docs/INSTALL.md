@@ -218,6 +218,10 @@ echo '* * * * * /opt/wechat-export-send/bin/wechat-export-send watchdog --instan
 
 当前打开的会话标题和模板一致时，发送不会再去搜索。所以发之前要保证它是打开的，不一致时会走搜索，搜不到就报 `failed`。
 
+## 接下游
+
+导出怎么读、发送怎么调，见 [INTEGRATION.md](INTEGRATION.md)。
+
 ## 升级
 
 解压新版本，把 `instances/` 和 `client/` 搬过去（或者一直用 `WES_HOME`、`WES_CLIENT_DIR` 放在外面），重新 `./install.sh --images`，再 `instance up`。`conversation_id` 由实例的盐决定，不会因为升级改变。

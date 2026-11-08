@@ -39,6 +39,10 @@
 - `./install.sh --tools`：只构建工具镜像
 - 导出边读边写，不再把消息全留在内存里
 
+### 文档
+
+- `docs/INTEGRATION.md`：下游怎么接，文里的 Python 片段和状态表由测试核对
+
 ### 没有带过来的
 
 总结、日报、网站、QQ（都在 chat-digest）。

@@ -91,6 +91,7 @@ demo 把仓库带的虚构加密账号导出到 `demo-output/export/`，并检�
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：数据流和组件
 - [docs/SECURITY.md](docs/SECURITY.md)：读什么、写什么、要什么权限、有什么风险
 - [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)：版本支持
+- [docs/INTEGRATION.md](docs/INTEGRATION.md)：下游怎么接：读导出、调发送，带 chat-digest 的端到端示例
 - [docs/CONTRACT.md](docs/CONTRACT.md)：`chat-export/v1` 和 `chat-send/v1`
 - [docs/DATABASE.md](docs/DATABASE.md)：数据库格式和解析规则
 - [docs/VALIDATION.md](docs/VALIDATION.md)：干净环境实测记录
