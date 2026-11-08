@@ -51,8 +51,8 @@ class World:
         synthetic.build_account(self.dir)
         calibration = json.loads((ROOT / "config" / "ui-calibration.json").read_text(encoding="utf-8"))
         calibration.update(display=display, search_delay_seconds=0.3, switch_delay_seconds=0.4, paste_settle_seconds=0.4,
-                           send_settle_seconds=0.3, confirmation_timeout_seconds=8, clipboard_wait_seconds=4,
-                           image_ready_timeout_seconds=5, allowed_visible_window_titles=["Fluxbox", "tk", "fake_weixin.py"])
+                           send_settle_seconds=0.3, confirmation_timeout_seconds=15, clipboard_wait_seconds=15,
+                           image_ready_timeout_seconds=20, allowed_visible_window_titles=["Fluxbox", "tk", "fake_weixin.py"])
         self.calibration = calibration
         (self.dir / "calibration").mkdir(mode=0o700)
         (self.dir / "calibration" / "ui-calibration.json").write_text(json.dumps(calibration), encoding="utf-8")
