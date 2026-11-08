@@ -207,6 +207,11 @@ def _parse_app(content: str, result: dict) -> dict:
     description = _child_text(app, "des")
     url = _child_text(app, "url")
     result["app_type"] = app_type
+    if app_type == "62":  # 拍一拍：没有真正的发送者，是一条系统提示
+        result["type"] = "system"
+        if title:
+            result["text"] = title
+        return result
     if app_type == "57":
         result["type"] = "quote"
         if title:

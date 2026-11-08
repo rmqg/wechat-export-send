@@ -164,6 +164,31 @@ def _protobuf_fields(data: bytes):
         yield number, wire, value
 
 
+def packed_resource_md5(packed_info) -> str | None:
+    """消息行 packed_info_data 里缓存文件名用的 md5：protobuf 字段 3 里的字段 4，32 位十六进制。
+
+    这是对 4.1.13.26 观察到的结构（实测 1054 张图全部能对上文件名），不是公开规范；解不出就返回 None。
+    """
+    if isinstance(packed_info, memoryview):
+        packed_info = packed_info.tobytes()
+    if isinstance(packed_info, str):
+        packed_info = packed_info.encode("latin-1", "ignore")
+    if not isinstance(packed_info, (bytes, bytearray)) or not packed_info:
+        return None
+    try:
+        for number, wire, value in _protobuf_fields(bytes(packed_info)):
+            if number != 3 or wire != 2:
+                continue
+            for inner_number, inner_wire, inner in _protobuf_fields(value):
+                if inner_number == 4 and inner_wire == 2 and len(inner) == 32:
+                    text = inner.decode("ascii").lower()
+                    if all(c in "0123456789abcdef" for c in text):
+                        return text
+    except (ValueError, UnicodeDecodeError, IndexError):
+        return None
+    return None
+
+
 def parse_room_nicknames(ext_buffer) -> dict[str, str]:
     """尽力解析 chat_room.ext_buffer 里的群昵称：成员是字段 1，其中 1=账号、2=群昵称。
 

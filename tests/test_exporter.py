@@ -101,6 +101,55 @@ def test_text_that_looks_like_prefix_is_not_eaten(account):
     assert latest["910011"]["sender_name"] == "周禾"
 
 
+def test_local_id_out_of_time_order_is_not_skipped(account):
+    """真实库里同步历史时 local_id 和时间顺序不一致：时间更晚、ID 更小的行不能漏。"""
+    root, info = account
+    from wechat_export_send import verify
+    # 新一批行：先插入的时间晚，后插入的时间早
+    synthetic.append_group_message(root, server_id=910020, text="时间晚但 ID 小", created=synthetic.START + 12900)
+    synthetic.append_group_message(root, server_id=910021, text="时间早但 ID 大", created=synthetic.START + 12800)
+    stats = run(root, info)
+    assert stats["new_lines"] == 18
+    assert {"910020", "910021"} <= {message["id"] for message in lines(root)}
+    keys = sqlcipher.load_keys(root / "keys" / "all_keys.json")
+    work = root / "verify-work"
+    work.mkdir()
+    settings = _merge(DEFAULTS, {})["export"]
+    result = verify.compare(exporter.Source(Path(info["storage"]), keys, work), root / "export", settings, IdMapper(b"test-salt", "hash"))
+    assert result["mismatch_count"] == 0, result
+
+
+def test_image_found_through_packed_info_md5(account):
+    """真实的 .dat 文件名不是 XML 里的 md5，而是 packed_info_data 里的。"""
+    root, info = account
+    from wechat_export_send import wcdb
+    picture = synthetic._png(24, 24)
+    alias = hashlib_md5(b"resource name")
+    directory = Path(info["storage"]).parent / "msg" / "attach" / hashlib_md5(synthetic.GROUP.encode()) / "2026-10" / "Img"
+    (directory / f"{alias}_h.dat").write_bytes(synthetic._xor_dat(picture, 0x5A))
+    inner = b"\x22\x20" + alias.encode()
+    packed = b"\x1a" + bytes([len(inner)]) + inner
+    assert wcdb.packed_resource_md5(packed) == alias
+    keys = json.loads((root / "keys" / "all_keys.json").read_text(encoding="utf-8"))
+    synthetic._rewrite(Path(info["storage"]) / "message" / "message_0.db", keys["message/message_0.db"], [
+        (f"UPDATE {wcdb.message_table(synthetic.GROUP)} SET packed_info_data=? WHERE server_id=900007", (packed,))])
+    run(root, info)
+    message = next(item for item in lines(root) if item["id"] == "900007")
+    assert message["media"][0]["status"] == "ready" and message["media"][0]["is_thumbnail"] is False
+
+
+def test_timestamped_thumbnail_is_still_a_thumbnail(tmp_path):
+    from wechat_export_send import media
+    picture = synthetic._png(8, 8)
+    thumb = tmp_path / ("a" * 32 + "_1793951284_t.dat")
+    thumb.write_bytes(synthetic._xor_dat(picture, 1))
+    assert media.best_cached_image([thumb], {}, None, None, allow_thumbnail=False) is None
+    assert media.best_cached_image([thumb], {}, None, None, allow_thumbnail=True)["is_thumbnail"] is True
+    (tmp_path / "msg" / "attach" / "x" / "Img").mkdir(parents=True)
+    (tmp_path / "msg" / "attach" / "x" / "Img" / thumb.name).write_bytes(b"x")
+    assert "a" * 32 in media.index_attach_dir(tmp_path, "nobody")
+
+
 def test_unchanged_shard_skipped_when_nothing_pending(account):
     root, info = account
     settings = {"media": {"enabled": False}}

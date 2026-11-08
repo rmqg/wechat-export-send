@@ -58,6 +58,19 @@ def test_system_and_revoke():
     assert result["type"] == "revoke" and result["text"] == "某人 撤回了一条消息"
 
 
+def test_pat_is_system():
+    xml = "<msg><appmsg><title>某人 拍了拍 某人</title><type>62</type></appmsg></msg>"
+    result = mp.parse_message(49, 62, xml)
+    assert result["type"] == "system" and result["text"] == "某人 拍了拍 某人"
+
+
+def test_packed_md5_malformed_is_none():
+    assert wcdb.packed_resource_md5(None) is None
+    assert wcdb.packed_resource_md5(b"") is None
+    assert wcdb.packed_resource_md5(b"\xff\xff\xff") is None
+    assert wcdb.packed_resource_md5(b"\x1a\x05\x22\x03abc") is None
+
+
 def test_unparseable_app_is_other_and_keeps_no_xml():
     result = mp.parse_message(49, 0, "<msg><broken")
     assert result["type"] == "other" and "text" not in result

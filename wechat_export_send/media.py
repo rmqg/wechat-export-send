@@ -285,8 +285,8 @@ def best_cached_image(candidates: list[Path], attributes: dict, aes_key, xor_key
     """在缓存文件里挑最好的一份。缩略图绝不算原图，只有明确允许时才返回并标记。"""
     full, thumbnails = [], []
     for path in candidates:
-        suffix = path.stem.split("_", 1)[1].lower() if "_" in path.stem else ""
-        (thumbnails if suffix == "t" else full).append(path)
+        # 文件名形如 <md5>.dat、<md5>_h.dat、<md5>_t.dat，缩略图也可能带时间戳：<md5>_<时间>_t.dat
+        (thumbnails if path.stem.lower().endswith("_t") else full).append(path)
     choices = []
     for path in full:
         data, fmt = decrypt_dat(path, aes_key, xor_key)

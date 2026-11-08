@@ -217,10 +217,13 @@ class Exporter:
 
     def _scan_table(self, connection, relative, table, username, kind, display, conversation_id, table_state,
                     state, sender_ids, names, rooms, resources, since, lookback, now, batches) -> None:
-        cursor = int(table_state.get("local_id") or 0)
+        # floor 在这一轮里不能变：真实库里 local_id 和时间顺序不一致（同步历史时会逆序），
+        # 边扫边用推进后的游标判断，会把时间更晚、ID 更小的行跳过
+        floor = int(table_state.get("local_id") or 0)
+        cursor = floor
         recent: dict = table_state.get("recent") or {}
-        window = max(since, now - lookback) if cursor else since
-        rows = wcdb.read_messages(connection, table, after_local_id=cursor, since_ts=window)
+        window = max(since, now - lookback) if floor else since
+        rows = wcdb.read_messages(connection, table, after_local_id=floor, since_ts=window)
         conversation = state["conversations"].setdefault(conversation_id, {
             "kind": kind, "name": display,
             "file": f"conversations/{conversation_id}.jsonl", "message_count": 0, "last_ts": 0, "pending": []})
@@ -240,7 +243,7 @@ class Exporter:
             key = str(local_id)
             if created >= now - lookback:
                 kept_recent[key] = fingerprint
-            if recent.get(key) == fingerprint or (local_id <= cursor and key not in recent):
+            if recent.get(key) == fingerprint or (local_id <= floor and key not in recent):
                 # 已经写过且没变；或者比游标旧又不在回看表里（升级后第一次运行时的旧行）
                 continue
             is_self = int(row.get("origin_source") or 0) == 1
@@ -342,7 +345,7 @@ class Exporter:
         fallback = {"kind": "image", "status": "pending" if advertised else "missing"}
         if not settings.get("enabled"):
             return [fallback]
-        aliases = media_mod.image_aliases(resources.get((username, int(row.get("local_id") or 0))), attributes)
+        aliases = self._image_aliases(row, username, resources, attributes)
         candidates = [path for alias in aliases for path in attach_index.get(alias, [])]
         aes, xor = self._resolved_image_keys()
         found = media_mod.best_cached_image(candidates, attributes, aes, xor, allow_thumbnail=False) if candidates else None
@@ -358,6 +361,14 @@ class Exporter:
                 if thumb:
                     items.append(self._stored_image(thumb))
         return items
+
+    @staticmethod
+    def _image_aliases(row, username, resources, attributes) -> set[str]:
+        aliases = media_mod.image_aliases(resources.get((username, int(row.get("local_id") or 0))), attributes)
+        packed = wcdb.packed_resource_md5(row.get("packed_info_data"))
+        if packed:
+            aliases.add(packed)
+        return aliases
 
     def _stored_image(self, found: dict) -> dict:
         fmt = found["format"]
@@ -410,7 +421,8 @@ class Exporter:
         kept = {name: attributes[name] for name in ("md5", "length", "hdlength") if name in attributes}
         pending = conversation.setdefault("pending", [])
         pending[:] = [entry for entry in pending if entry["message"]["id"] != message["id"]]
-        pending.append({"message": message, "shard": relative, "local_id": local_id, "attributes": kept})
+        packed = wcdb.packed_resource_md5(row.get("packed_info_data"))
+        pending.append({"message": message, "shard": relative, "local_id": local_id, "attributes": kept, "packed_md5": packed})
 
     def _recheck_pending(self, conversation, relative, username, resources, attach_index, batches, now) -> None:
         pending = conversation.get("pending") or []
@@ -441,6 +453,8 @@ class Exporter:
     def _find_pending(self, entry, username, resources, index) -> dict | None:
         attributes = entry.get("attributes") or {}
         aliases = media_mod.image_aliases(resources.get((username, int(entry.get("local_id") or 0))), attributes)
+        if entry.get("packed_md5"):
+            aliases.add(entry["packed_md5"])
         candidates = [path for alias in aliases for path in index.get(alias, [])]
         if not candidates:
             return None
