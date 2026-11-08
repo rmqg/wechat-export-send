@@ -1,0 +1,14 @@
+#!/bin/sh
+# 优先用 install.sh 建的虚拟环境；没有就用系统 python3（离线 demo 也能跑，只是慢）。
+set -e
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case "$link" in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+ROOT=$(cd "$(dirname "$self")/.." && pwd)
+PYTHON=python3
+[ -x "$ROOT/.venv/bin/python" ] && PYTHON="$ROOT/.venv/bin/python"
+PYTHONPATH="$ROOT${ROOT:+:}$ROOT/.deps${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+exec "$PYTHON" -m wechat_export_send.cli "$@"

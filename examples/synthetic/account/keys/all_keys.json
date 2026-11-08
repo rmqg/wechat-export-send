@@ -1,0 +1,27 @@
+{
+ "_db_dir": "synthetic",
+ "contact/contact.db": {
+  "enc_key": "c9a8753c527f0f528e9665f45f63e42e3bd025f6812ddfce83adc9795d4ae11f",
+  "salt": "95ad0339ae6da9f3cc87d08e5019239d"
+ },
+ "session/session.db": {
+  "enc_key": "b03cf8a27dda3e0c88acfe4d3a6c7a3edb22c682294641394a3494769f7afabd",
+  "salt": "3553d47affa9113a219454f870cfa51a"
+ },
+ "message/message_0.db": {
+  "enc_key": "018c1b0ef4895410aa38e8df0fbb285f2e89e2b90c8bfedaf58bdf4ef32cf293",
+  "salt": "bdee8cb8539849d2ce5b954470d96e85"
+ },
+ "message/message_1.db": {
+  "enc_key": "6a55910853fde21581a5c8e600a623870bcb7377f33229d5037cff714651da10",
+  "salt": "1b8bf7aa175640adea52ba1dc85e2c02"
+ },
+ "message/message_resource.db": {
+  "enc_key": "188cf70d9f7c31a87832e64258f2875954f9d417b78a006d2490acadca9e8e4d",
+  "salt": "50fed97309a7bc42539fe8590943fcff"
+ },
+ "message/message_0_fts.db": {
+  "enc_key": "9b9d5a721f46bc1c8e55de6a7cc6eab4c03d1d7653431d66f249d063ed44f548",
+  "salt": "72fb96832cac8d897101549e574aaf79"
+ }
+}

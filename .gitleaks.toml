@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "合成样本里的公开测试向量，不是真实凭据"
+paths = ['''(^|/)examples/synthetic/''', '''(^|/)wechat_export_send/synthetic\.py$''', '''(^|/)docs/VALIDATION\.md$''']

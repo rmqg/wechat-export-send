@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+# OpenWrt 上常驻导出。复制成 /etc/init.d/wechat-export-send-export-<实例>，改下面两行。
+# 看门狗用 cron：* * * * * /opt/wechat-export-send/bin/wechat-export-send watchdog --instance main >/dev/null 2>&1
+USE_PROCD=1
+START=99
+STOP=7
+APP=/opt/wechat-export-send
+INSTANCE=main
+
+start_service() {
+    procd_open_instance
+    procd_set_param command "$APP/bin/wechat-export-send" export --instance "$INSTANCE" --watch
+    procd_set_param respawn 3600 60 0
+    procd_set_param term_timeout 60
+    procd_close_instance
+}

@@ -1,0 +1,9 @@
+[Unit]
+Description=每分钟检查实例 %i 的微信登录状态
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

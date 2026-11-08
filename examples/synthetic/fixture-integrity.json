@@ -1,0 +1,17 @@
+{
+ "notice": "PUBLIC TEST-ONLY synthetic data",
+ "sha256": {
+  "gui/xwechat_files/synthetic_self_0a1b/db_storage/contact/contact.db": "99e9264d58d93393fd808dcd47e1d4e64f86a7aa34ed4add026a0bb6b20e1e3c",
+  "gui/xwechat_files/synthetic_self_0a1b/db_storage/message/message_0.db": "46ff0bb92323fcca53c15fc04f650fe5dd7c5a50b00d5c4539c28ccd8a9b75a0",
+  "gui/xwechat_files/synthetic_self_0a1b/db_storage/message/message_0_fts.db": "8af77f19cd891e5e3ba647cf850f6cc7fe710ea70127a36e420b6de75e8bf212",
+  "gui/xwechat_files/synthetic_self_0a1b/db_storage/message/message_1.db": "a41de9a25c33295cf51ec4ff63014c09bd2442b894cc7d82e4c26c548be91c9a",
+  "gui/xwechat_files/synthetic_self_0a1b/db_storage/message/message_resource.db": "7cb18d1d5c0e5dc255f8829f05fc6da0af5913d0407bfcb1c942bd24b9ff000f",
+  "gui/xwechat_files/synthetic_self_0a1b/db_storage/session/session.db": "2fb0b8ce047e992309adaf0836ff4b0de725211583677f576732c489b06d1f8e",
+  "gui/xwechat_files/synthetic_self_0a1b/msg/attach/91f23f7aef380962dab8145887c2f111/2026-10/Img/690a3956be3fdad1e0d750d7e78be544.dat": "31d5046116c9dcc098ba6553498f86cd5d078d23964f7a986b8726c8ccb9b981",
+  "gui/xwechat_files/synthetic_self_0a1b/msg/attach/91f23f7aef380962dab8145887c2f111/2026-10/Img/cdbb213d31b3176198f1beac0ed68b80.dat": "342a5477132ae2e57fa9fe6732b7af1d560f6e1d7a282333cd9de1b3e745e210",
+  "gui/xwechat_files/synthetic_self_0a1b/msg/attach/91f23f7aef380962dab8145887c2f111/2026-10/Img/eb832fccf53aa44ae225ca4e189a1438_t.dat": "25027e385a25d90a622025e2df3d3f08cb7bf35d326cf60ff52719ef33cbff77",
+  "gui/xwechat_files/synthetic_self_0a1b/msg/file/2026-10/\u6d3b\u52a8\u6e05\u5355.txt": "2044b968bb0b390dfc37762151edd24bd3084150799cb71b96e8cc072f22dfbc",
+  "keys/all_keys.json": "cad16805107f18e1ce291774ef37f02ebea07930b33847ee347e8a51fd564b26",
+  "keys/image_key.json": "f91cb55d5f7b2f96a978232c843d0b8f876be806d62a1a72ba577112a2515775"
+ }
+}

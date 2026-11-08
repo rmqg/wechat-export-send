@@ -1,0 +1,10 @@
+.git
+.venv
+.deps
+dist
+instances
+client
+demo-output
+tests
+docs
+__pycache__

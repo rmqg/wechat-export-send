@@ -1,0 +1,56 @@
+{
+  "instance": "main",
+  "account_dir": "",
+  "export": {
+    "root": "export",
+    "timezone": "Asia/Shanghai",
+    "id_mode": "hash",
+    "kinds": [
+      "group",
+      "private"
+    ],
+    "include": [],
+    "exclude": [],
+    "since": 0,
+    "lookback_seconds": 3600,
+    "interval_seconds": 300,
+    "members": true,
+    "media": {
+      "enabled": true,
+      "max_bytes": 104857600,
+      "thumbnails": false,
+      "files": true,
+      "pending_days": 7
+    }
+  },
+  "send": {
+    "mode": "docker",
+    "tools_image": "wechat-export-send-tools:local",
+    "calibration": "",
+    "timeout_seconds": 180,
+    "lock_wait_seconds": 60,
+    "confirm_base_seconds": 35,
+    "max_image_bytes": 26214383,
+    "max_text_bytes": 16384,
+    "evidence": true,
+    "memory_mb": 768,
+    "tmpfs_mb": 384
+  },
+  "originals": {
+    "enabled": false,
+    "client_version_code": -227271398,
+    "max_per_run": 50,
+    "timeout_seconds": 600
+  },
+  "media_origin": {
+    "enabled": false,
+    "port": 8099,
+    "token": ""
+  },
+  "watchdog": {
+    "bark_url": "",
+    "group": "wechat",
+    "fail_level": "timeSensitive",
+    "recovery_level": "active"
+  }
+}

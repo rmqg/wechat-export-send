@@ -1,0 +1,6 @@
+.github export-ignore
+.gitattributes export-ignore
+* text=auto eol=lf
+*.db binary
+*.dat binary
+*.png binary

@@ -1,0 +1,44 @@
+# 一个实例一个 compose 项目。请用 wechat-export-send instance up <名字> 启动，它会带上 instance.env。
+name: wes-${INSTANCE:?用 wechat-export-send instance up 启动}
+services:
+  desktop:
+    image: ${DESKTOP_IMAGE:-wechat-export-send-desktop:local}
+    build:
+      context: docker/desktop
+    platform: ${DESKTOP_PLATFORM:-linux/amd64}
+    container_name: wes-${INSTANCE}-desktop
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${DESKTOP_MEM_LIMIT:-2g}
+    cpus: ${DESKTOP_CPUS:-1.5}
+    pids_limit: 512
+    shm_size: 512m
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      WECHAT_BINARY_SHA256: ${WECHAT_BINARY_SHA256:-}
+    ports:
+      - "${VNC_BIND:-127.0.0.1}:${VNC_WEB_PORT:-17900}:7900"
+    tmpfs:
+      - /tmp:rw,exec,nosuid,nodev,size=256m,mode=1777
+      - /run:rw,nosuid,nodev,size=16m,mode=755
+    volumes:
+      - ${CLIENT_ROOT:?先运行 wechat-export-send client install}/opt/wechat:/opt/wechat:ro
+      - ${INSTANCE_DIR:?缺少 INSTANCE_DIR}/gui:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+  tools:
+    image: ${TOOLS_IMAGE:-wechat-export-send-tools:local}
+    build:
+      context: .
+      dockerfile: docker/tools/Dockerfile
+    profiles: [tools]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

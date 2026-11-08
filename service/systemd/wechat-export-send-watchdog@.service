@@ -1,0 +1,6 @@
+[Unit]
+Description=wechat-export-send login watchdog (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wechat-export-send/bin/wechat-export-send watchdog --instance %i

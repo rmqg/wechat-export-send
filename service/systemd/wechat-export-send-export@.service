@@ -1,0 +1,9 @@
+[Unit]
+Description=wechat-export-send export (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wechat-export-send/bin/wechat-export-send export --instance %i
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal

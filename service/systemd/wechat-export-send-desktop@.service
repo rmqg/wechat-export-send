@@ -1,0 +1,15 @@
+# 开机拉起实例 %i 的桌面容器。把 /opt/wechat-export-send 换成你的安装目录。
+[Unit]
+Description=wechat-export-send desktop (%i)
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/wechat-export-send/bin/wechat-export-send instance up %i
+ExecStop=/opt/wechat-export-send/bin/wechat-export-send instance down %i
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

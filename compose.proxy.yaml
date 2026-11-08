@@ -1,0 +1,28 @@
+# 可选：把某个实例的 noVNC 经 nginx 暴露到一个内网地址，强制 HTTP Basic。默认用不到，优先用 SSH 隧道。
+# 用法：把 VNC_PROXY_* 写进 instance.env，然后
+#   docker compose --env-file instances/<名字>/instance.env -f compose.proxy.yaml up -d
+name: wes-${INSTANCE:?缺少 INSTANCE}-proxy
+services:
+  proxy:
+    image: nginx:stable-alpine@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949
+    container_name: wes-${INSTANCE}-proxy
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, CHOWN, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 64
+    environment:
+      VNC_PROXY_BIND: ${VNC_PROXY_BIND:?写一个内网地址，不要写 0.0.0.0}
+      VNC_PROXY_PORT: ${VNC_PROXY_PORT:-17901}
+      VNC_WEB_PORT: ${VNC_WEB_PORT:-17900}
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=32m,mode=1777
+      - /etc/nginx/conf.d:rw,nosuid,nodev,size=1m
+      - /var/cache/nginx:rw,nosuid,nodev,size=32m
+      - /var/run:rw,nosuid,nodev,size=1m
+    volumes:
+      - ./docker/proxy/novnc.conf.template:/etc/nginx/templates/novnc.conf.template:ro
+      - ${VNC_PROXY_HTPASSWD:?用 htpasswd 生成一个密码文件}:/etc/nginx/htpasswd:ro

@@ -1,0 +1,19 @@
+# 真实数据，绝不能进仓库
+/instances/
+/client/
+/demo-output/
+*.deb
+all_keys.json
+passphrase.json
+image_key.json
+!examples/synthetic/account/keys/all_keys.json
+!examples/synthetic/account/keys/image_key.json
+
+# 环境
+/.venv/
+/.deps/
+/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env

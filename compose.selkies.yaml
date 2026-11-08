@@ -1,0 +1,23 @@
+# 备选桌面：外部镜像 nickrunning/wechat-selkies（MIT，内含它自己带的微信客户端）。
+# 没有和本项目的捕获、发送一起测过，只给想要浏览器桌面的人当起点，见 docs/COMPATIBILITY.md。
+# 用法：docker compose --env-file instances/<名字>/instance.env -f compose.selkies.yaml up -d
+name: wes-${INSTANCE:?缺少 INSTANCE}-selkies
+services:
+  desktop:
+    image: ${WECHAT_DESKTOP_IMAGE:-ghcr.io/nickrunning/wechat-selkies:0.0.12-minimal}
+    container_name: wes-${INSTANCE}-desktop
+    restart: unless-stopped
+    shm_size: 1gb
+    ports:
+      - "${VNC_BIND:-127.0.0.1}:${VNC_WEB_PORT:-17900}:3000"
+    volumes:
+      - ${INSTANCE_DIR:?缺少 INSTANCE_DIR}/gui:/config
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Asia/Shanghai}
+      LC_ALL: zh_CN.UTF-8
+      CUSTOM_USER: ${DESKTOP_USER:-operator}
+      PASSWORD: ${DESKTOP_PASSWORD:?请先设置 DESKTOP_PASSWORD}
+      AUTO_START_WECHAT: "true"
+      AUTO_START_QQ: "false"
