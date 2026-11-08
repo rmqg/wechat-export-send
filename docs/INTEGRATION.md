@@ -300,6 +300,7 @@ docker build -t chat-digest-runtime:2.0.0 .
 ```
 
 - `export.root` 是绝对路径。
+- **改了 `worker_uid`、`worker_gid` 之后，要再运行一次 `./bin/chat-digest init`**，它会按新的用户重新设置 `runtime/` 的属主。不运行的话，worker 写不进 `runtime/`。
 - `send.command` 是**参数列表**，不是一条字符串。chat-digest 会在后面追加 `--to`、内容、`--request-id`、`--timeout` 和 `--json`。
 - `worker_uid`、`worker_gid` 换成第 1 步查到的值。
 
@@ -331,6 +332,31 @@ docker build -t chat-digest-runtime:2.0.0 .
 ```
 
 ## 出了问题
+
+### 报 `unexpected visible window/dialog`
+
+`--dry-run` 或发送返回：
+
+```json
+{"schema": "chat-send/v1", "status": "failed", "detail": "提交前出错，确定没有发出去",
+ "extra": {"code": "RuntimeError", "stage": "select_conversation", "reason": "unexpected visible window/dialog: 1 window(s)"}}
+```
+
+意思是微信窗口之外，还有一个标题不在允许名单里的窗口持续显示了 1 秒以上。这是提交之前的检查，**确定没有发出去**，可以放心重试。
+
+处理步骤：
+
+1. 只读看一眼有哪些窗口（容器名、显示号换成你的）：
+
+   ```sh
+   docker exec <桌面容器> xwininfo -display :99 -root -tree | grep -E '^ +0x' | head -20
+   ```
+
+2. 打开 noVNC 确认它是什么。图片查看器、更新提示、搜一搜网页窗口这些，用**它自己的关闭按钮**关掉。**不要按 Esc**：焦点在微信主窗口时，主窗口会被收起来。
+3. 再跑一次 `--dry-run`，返回 `dry_run` 就可以了。
+4. 那个窗口是正常的、以后也会一直在：把它的标题加进 `ui-calibration.json` 的 `allowed_visible_window_titles`。不认识的窗口不要加。
+
+这条输出的标题可能带会话名，所以只报数量，不报名字。
 
 - 导出和发送的排障：`wechat-export-send` 的 `docs/TROUBLESHOOTING.md`。先跑 `wechat-export-send doctor --instance main`。
 - 支持哪些版本、哪些路径实测过：`wechat-export-send` 的 `docs/COMPATIBILITY.md`。

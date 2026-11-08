@@ -147,6 +147,7 @@
 | `header_pixel_threshold` | `8` | 单个像素差多少算不同 |
 | `header_max_bad_fraction` | `0.001` | 不同像素的比例上限 |
 | `allowed_visible_window_titles` | 见文件 | 这些标题的窗口不算意外弹窗 |
+| `transient_window_grace_seconds` | `1.0`（可选字段） | 意外窗口持续这么久才算数。下拉框刚创建时标题还没设置，不等一下会误报 |
 | `image_ready_timeout_seconds` | `45` | 图片粘贴后等按钮就绪的时间 |
 | `search_delay_seconds` | `1.2` | 输入搜索词后等多久 |
 | `switch_delay_seconds` | `1.2` | 点结果后等多久 |

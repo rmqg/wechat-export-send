@@ -81,6 +81,9 @@ def _calibrated_window(config: dict) -> dict:
     return window
 
 
+_X_ERROR_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+
 class X11:
     ZPIXMAP = 2
     IS_VIEWABLE = 2
@@ -103,6 +106,10 @@ class X11:
         self.xtst = ctypes.CDLL(xtst_path)
         self._bind()
         self.x.XInitThreads()
+        # 短命窗口可能在查询途中消失。Xlib 默认的错误处理会让整个进程退出，这里改成忽略：
+        # 查询本身会返回失败，上层按「没有这个窗口」或者失败处理
+        self._error_handler = _X_ERROR_HANDLER(lambda display, event: 0)
+        self.x.XSetErrorHandler(self._error_handler)
         self.display = self.x.XOpenDisplay(display_name.encode())
         if not self.display:
             raise RuntimeError(f"cannot connect to X11 DISPLAY={display_name}")
@@ -310,22 +317,31 @@ class X11:
 
 
     def _select_window(self, config: dict) -> dict:
-        matches, visible_titles = self._target_windows(config)
-        if not matches:
-            raise RuntimeError("Weixin client window not found")
-        if len(matches) != 1:
-            raise RuntimeError(f"ambiguous Weixin client windows: {len(matches)} candidates")
-        main = matches[0]
-        if main["map_state"] != self.IS_VIEWABLE:
-            raise RuntimeError("Weixin client window is hidden or unmapped")
-        allowed = set(config.get("allowed_visible_window_titles", []))
-        visible_titles.extend(self._override_redirect_windows(main))
-        unexpected = [(wid, title) for wid, title in visible_titles
-                      if wid != main["window_id"] and title not in allowed]
-        if unexpected:
-            # 标题可能带会话名，只报数量
-            raise RuntimeError(f"unexpected visible window/dialog: {len(unexpected)} window(s)")
-        return main
+        # 搜索下拉框这类窗口刚创建时标题还没设置，逐键检查会撞上这几毫秒。意外窗口要持续存在才算数；
+        # 真正的对话框不会自己消失，照样拦得住。点击时服务器被抓取，等也没用，直接按失败处理
+        deadline = None
+        while True:
+            matches, visible_titles = self._target_windows(config)
+            if not matches:
+                raise RuntimeError("Weixin client window not found")
+            if len(matches) != 1:
+                raise RuntimeError(f"ambiguous Weixin client windows: {len(matches)} candidates")
+            main = matches[0]
+            if main["map_state"] != self.IS_VIEWABLE:
+                raise RuntimeError("Weixin client window is hidden or unmapped")
+            allowed = set(config.get("allowed_visible_window_titles", []))
+            visible_titles.extend(self._override_redirect_windows(main))
+            unexpected = [(wid, title) for wid, title in visible_titles
+                          if wid != main["window_id"] and title not in allowed]
+            if not unexpected:
+                return main
+            now = time.monotonic()
+            if deadline is None:
+                deadline = now + float(config.get("transient_window_grace_seconds", 1.0))
+            if getattr(self, "_server_grabbed", False) or now >= deadline:
+                # 标题可能带会话名，只报数量
+                raise RuntimeError(f"unexpected visible window/dialog: {len(unexpected)} window(s)")
+            time.sleep(0.05)
 
     def _screen_size(self) -> tuple[int, int]:
         attrs = XWindowAttributes()
@@ -561,6 +577,7 @@ class X11:
         if not (0 <= x < current["width"] and 0 <= y < current["height"]):
             raise ValueError("calibration click is outside Weixin window")
         self.x.XGrabServer(self.display)
+        self._server_grabbed = True
         button_down = False
         release_ok = True
         try:
@@ -587,6 +604,7 @@ class X11:
                     release_ok = bool(self.xtst.XTestFakeButtonEvent(self.display, 1, 0, self.CURRENT_TIME))
             finally:
                 try:
+                    self._server_grabbed = False
                     self.x.XUngrabServer(self.display)
                 finally:
                     self.x.XSync(self.display, 0)

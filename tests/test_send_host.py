@@ -228,6 +228,56 @@ def test_capture_container_can_write_private_keys_dir(instance, monkeypatch):
     assert f"src={instance.gui},dst=/config,readonly" in joined
 
 
+def _fake_x11(script):
+    """_select_window 的逻辑测试：不连 X，按脚本返回每次看到的窗口。"""
+    from wechat_export_send.send import x11
+    conn = x11.X11.__new__(x11.X11)
+    conn.IS_VIEWABLE = 2
+    main = {"window_id": 1, "map_state": 2}
+    rows = iter(script)
+    last = {"value": []}
+
+    def target(config):
+        last["value"] = next(rows, last["value"])
+        return [main], [(1, "Weixin"), *last["value"]]
+
+    conn._target_windows = target
+    conn._override_redirect_windows = lambda main_window: []
+    return conn
+
+
+ALLOWED = {"allowed_visible_window_titles": ["wechat"], "transient_window_grace_seconds": 0.15}
+
+
+def test_window_with_title_not_set_yet_is_not_an_error():
+    """下拉框刚创建时标题是空的，下一刻变成 wechat：不能报意外窗口。"""
+    conn = _fake_x11([[(2, "")], [(2, "")], [(2, "wechat")]])
+    assert conn._select_window(ALLOWED)["window_id"] == 1
+
+
+def test_real_dialog_is_still_refused():
+    conn = _fake_x11([[(2, "Update available")]])
+    with pytest.raises(RuntimeError, match="unexpected visible window/dialog: 1 window"):
+        conn._select_window(ALLOWED)
+
+
+def test_no_waiting_while_server_is_grabbed():
+    import time
+    conn = _fake_x11([[(2, "")], [(2, "wechat")]])
+    conn._server_grabbed = True
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="unexpected"):
+        conn._select_window({**ALLOWED, "transient_window_grace_seconds": 5})
+    assert time.monotonic() - start < 1
+
+
+def test_error_message_never_contains_the_title():
+    conn = _fake_x11([[(2, "某个私人会话的名字")]])
+    with pytest.raises(RuntimeError) as caught:
+        conn._select_window(ALLOWED)
+    assert "私人" not in str(caught.value)
+
+
 def test_resolve_target_rules():
     from wechat_export_send.config import IdMapper
     from wechat_export_send.send.worker import StageError, resolve_target
