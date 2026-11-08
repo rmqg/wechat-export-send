@@ -156,6 +156,7 @@
 | `--dry-run` | 定位会话、校验标题和空草稿，不提交，返回 `dry_run`。可以不带内容 |
 | `--json` | 总是输出 JSON，留着是为了和接口约定一致 |
 | `--instance` | 实例名 |
-| `--calibrate` | 选中会话，保存标题模板，返回 `calibrated` |
+| `--calibrate` | 选中会话，保存标题模板，返回 `calibrated`。标题区域是空白（没选中会话）时报 `failed`，不存模板 |
+| `--current` | 和 `--calibrate` 一起用：不搜索，直接用现在打开的会话。搜不到的会话（如文件传输助手）先在 noVNC 里打开 |
 
 标准输出里除了约定的字段，还可能有 `extra`：`code`（机器可读的失败原因）、`stage`（走到哪一步）、`receipt`（`server_id`、`local_id`、`create_time`、`source_db`）。

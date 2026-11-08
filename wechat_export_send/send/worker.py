@@ -202,7 +202,17 @@ def _select_conversation(x11, window: dict, calibration: dict, term: str) -> Non
     time.sleep(float(calibration.get("switch_delay_seconds", 1.2)))
 
 
+def header_is_blank(screen, calibration: dict) -> bool:
+    """标题区域接近纯色时说明没有打开任何会话。这种模板绝不能存，也不算匹配。"""
+    x, y, width, height = map(int, calibration["header_region"])
+    crop = screen.crop((x, y, x + width, y + height)).convert("L")
+    low, high = crop.getextrema()
+    return high - low < int(calibration.get("header_min_contrast", 40))
+
+
 def _header_ok(x11_mod, screen, calibration: dict, template: Path) -> bool:
+    if header_is_blank(screen, calibration):
+        return False
     ok, _ = x11_mod.image_match(screen, calibration["header_region"], template,
                                 int(calibration.get("header_pixel_threshold", 18)),
                                 float(calibration.get("header_max_bad_fraction", 0.001)))
@@ -264,10 +274,19 @@ def run_job(job_dir: Path) -> dict:
         window = display_x11.find_window(calibration)
 
         progress.set("select_conversation")
-        _select_conversation(display_x11, window, calibration, target["term"])
         screen = display_x11.screenshot(window)
+        current_only = bool(job.get("current"))
+        if current_only and mode != "calibrate":
+            raise StageError("current_only_calibrate", "--current 只能和 --calibrate 一起用")
+        already_there = mode != "calibrate" and template.is_file() and _header_ok(x11_mod, screen, calibration, template)
+        if not already_there and not current_only:
+            # 当前打开的已经是目标会话时不搜索：少一次界面操作，也支持搜不到的会话（比如文件传输助手）
+            _select_conversation(display_x11, window, calibration, target["term"])
+            screen = display_x11.screenshot(window)
 
         if mode == "calibrate":
+            if header_is_blank(screen, calibration):
+                raise StageError("header_blank", "标题区域是空白的，没有选中会话，没有保存模板。在 noVNC 里打开目标会话后用 --calibrate --current")
             x, y, width, height = map(int, calibration["header_region"])
             template.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             screen.crop((x, y, x + width, y + height)).save(template, format="PNG")
@@ -398,6 +417,11 @@ def run_job(job_dir: Path) -> dict:
     finally:
         result["submitted"] = progress.submitted
         if display_x11 is not None:
+            try:
+                if not progress.submitted and result.get("status") == "failed":
+                    display_x11.dismiss_popups({})  # 失败时别把搜索下拉框留在屏幕上，否则下一次会被当成意外窗口
+            except Exception:
+                pass
             try:
                 display_x11.stop_clipboard()
                 display_x11.close()

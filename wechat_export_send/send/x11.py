@@ -54,6 +54,12 @@ class XSelectionEvent(ctypes.Structure):
                 ("property", ctypes.c_ulong), ("time", ctypes.c_ulong)]
 
 
+class XClientMessageEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                ("format", ctypes.c_int), ("data", ctypes.c_long * 5), ("pad", ctypes.c_long * 16)]
+
+
 class XPropertyEvent(ctypes.Structure):
     _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
                 ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("atom", ctypes.c_ulong),
@@ -586,6 +592,23 @@ class X11:
                     self.x.XSync(self.display, 0)
             if not release_ok:
                 raise RuntimeError("XTest could not release mouse button after button-down")
+    def dismiss_popups(self, config: dict) -> int:
+        """关掉搜索下拉框之类的小窗口。不能用 Esc：微信主窗口收到 Esc 会被收起来，只能靠重新启动唤醒。"""
+        closed = 0
+        for candidate in self._client_windows():
+            attrs = XWindowAttributes()
+            if not self.x.XGetWindowAttributes(self.display, candidate, ctypes.byref(attrs)):
+                continue
+            if self._window_title(candidate) == "wechat" and attrs.width < 400:
+                event = XClientMessageEvent(type=33, window=candidate, message_type=self.atom("_NET_CLOSE_WINDOW"), format=32)
+                event.data[1] = 2
+                self.x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.c_void_p]
+                self.x.XSendEvent(self.display, self.root, 0, (1 << 20) | (1 << 19), ctypes.byref(event))
+                closed += 1
+        if closed:
+            self.x.XSync(self.display, 0)
+        return closed
+
     def close(self) -> None:
         if self.display:
             self.x.XCloseDisplay(self.display)

@@ -47,7 +47,7 @@ result = tk.Label(root, text="", anchor="w", bg="#eeeeee")
 rx, ry = CALIBRATION["search_result"]
 result.place(x=rx - 100, y=ry - 20, width=240, height=40)
 hx, hy, hw, hh = CALIBRATION["header_region"]
-header = tk.Frame(root, width=hw, height=hh, bg="#ffffff")
+header = tk.Label(root, text="", bg="#ffffff", fg="#000000", anchor="w", font=("TkDefaultFont", 14, "bold"))  # 没选中会话时是空白
 header.place(x=hx, y=hy, width=hw, height=hh)
 cx, cy = CALIBRATION["compose"]
 compose = tk.Text(root, undo=False)
@@ -89,7 +89,8 @@ def header_color(name: str) -> str:
 
 def click_result(_event=None):
     state["conversation"] = result.cget("text")
-    header.configure(bg=header_color(state["conversation"]))
+    color = header_color(state["conversation"])
+    header.configure(bg=color, text="" if color == "#ffffff" else "TITLE")
     log("select", conversation=state["conversation"])
 
 

@@ -173,6 +173,35 @@ def test_wrong_header_is_failed_before_click(world):
     assert world.clicks() == []
 
 
+def test_blank_header_is_never_saved_as_template(world):
+    """没有选中会话时标题是空白：不能存成模板，否则之后什么都能匹配上。"""
+    world.start(FAKE_HEADER="#ffffff")
+    code, result = world.send("--to", GROUP_NAME, "--calibrate")
+    assert code == 1 and result["extra"]["code"] == "header_blank"
+    assert not list((world.dir / "calibration" / "headers").glob("*.png"))
+    assert world.clicks() == []
+
+
+def test_calibrate_current_does_not_search(world):
+    world.start()
+    code, result = world.send("--to", GROUP_NAME, "--calibrate", "--current")
+    assert code == 1 and result["extra"]["code"] == "header_blank"  # 还什么都没打开
+    world.calibrate(GROUP_NAME)  # 搜索选中一次
+    events = len([event for event in world.events() if event["event"] == "select"])
+    code, result = world.send("--to", GROUP_NAME, "--calibrate", "--current")
+    assert code == 0 and result["status"] == "calibrated", result
+    assert len([event for event in world.events() if event["event"] == "select"]) == events
+
+
+def test_already_open_conversation_skips_search(world):
+    world.start()
+    world.calibrate(GROUP_NAME)
+    before = len([event for event in world.events() if event["event"] == "select"])
+    code, result = world.send("--to", GROUP_NAME, "--text", "不用再搜索")
+    assert code == 0 and result["status"] == "sent", result
+    assert len([event for event in world.events() if event["event"] == "select"]) == before
+
+
 def test_uncalibrated_target_is_failed(world):
     world.start()
     code, result = world.send("--to", GROUP_NAME, "--text", "x")

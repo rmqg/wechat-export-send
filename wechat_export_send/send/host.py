@@ -48,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="输出 JSON（总是输出，留着是为了和接口约定一致）")
     parser.add_argument("--instance", default=os.environ.get("WES_INSTANCE"), help="实例名；只有一个实例时可省略")
     parser.add_argument("--calibrate", action="store_true", help="选中会话并保存标题模板（首次发送前做一次）")
+    parser.add_argument("--current", action="store_true", help="和 --calibrate 一起用：不搜索，直接用现在打开的会话。搜不到的会话（如文件传输助手）先在 noVNC 里打开")
     return parser
 
 
@@ -376,7 +377,7 @@ def send(args) -> dict:
                 if not instance.keys_file.is_file():
                     raise ConfigError("还没有密钥文件；先运行 keys capture")
                 job = {"mode": "dry_run" if args.dry_run and not args.calibrate else kind, "to": to,
-                       "payload_sha256": payload_hash, "budget_seconds": max(timeout - 15, 15),
+                       "payload_sha256": payload_hash, "budget_seconds": max(timeout - 15, 15), "current": bool(args.current),
                        "confirm_base_seconds": instance.config["send"]["confirm_base_seconds"],
                        "id_salt": instance.id_salt().hex(), "id_mode": instance.config["export"]["id_mode"], **paths}
                 if not instance.config["send"]["evidence"]:
@@ -418,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.to:
             raise InvalidArguments("必须给 --to")
         has_content = args.text is not None or args.text_file is not None or args.image is not None
+        if args.current and not args.calibrate:
+            raise InvalidArguments("--current 只能和 --calibrate 一起用")
         if args.calibrate and (has_content or args.dry_run or args.request_id):
             raise InvalidArguments("--calibrate 不能和发送内容、--dry-run、--request-id 一起用")
         if not args.calibrate and not has_content and not args.dry_run:
