@@ -91,6 +91,70 @@ def instance_create(args) -> int:
     return 0
 
 
+def instance_attach(args) -> int:
+    """对接一个已经在跑、已经登录的微信容器。容器和它的数据都不动，只读挂载；导出和状态放在实例自己的目录。"""
+    if not NAME_RE.fullmatch(args.name):
+        raise ConfigError("实例名只能用小写字母、数字、- 和 _，以字母或数字开头，不超过 31 个字符")
+    directory = instances_root() / args.name
+    if (directory / "config.json").exists():
+        raise ConfigError(f"实例已存在：{args.name}")
+    gui = Path(args.gui).resolve()
+    keys = Path(args.keys).resolve()
+    if not gui.is_dir():
+        raise ConfigError(f"找不到客户端数据目录：{gui}")
+    if not keys.is_file():
+        raise ConfigError(f"找不到密钥文件：{keys}")
+    info = gui.stat()
+    uid = args.puid if args.puid is not None else info.st_uid
+    gid = args.pgid if args.pgid is not None else info.st_gid
+    for sub in ("keys", "export", "state", "calibration/headers"):
+        (directory / sub).mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(instances_root(), 0o711 if os.getuid() == 0 else 0o700)
+    os.chmod(directory, 0o700)
+    config = {"instance": args.name, "gui_dir": str(gui),
+              "desktop": {"managed": False, "container": args.container, "docker_host": args.docker_host or "", "network": args.network or ""}}
+    if args.account_dir:
+        config["account_dir"] = args.account_dir
+    if args.runner:
+        config["export"] = {"runner": args.runner}
+    atomic_write(directory / "config.json", json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    atomic_write(directory / "instance.env", f"INSTANCE={args.name}\nINSTANCE_DIR={directory}\nPUID={uid}\nPGID={gid}\n")
+    atomic_write(directory / "keys" / "all_keys.json", keys.read_bytes())
+    if args.image_key:
+        atomic_write(directory / "keys" / "image_key.json", Path(args.image_key).read_bytes())
+    calibration = json.loads((ROOT / "config" / "ui-calibration.json").read_text(encoding="utf-8"))
+    if args.display:
+        calibration["display"] = args.display
+    atomic_write(directory / "calibration" / "ui-calibration.json", json.dumps(calibration, ensure_ascii=False, indent=2) + "\n")
+    instance = Instance.load(args.name)
+    instance.give_to_owner(directory, recursive=True)
+    print(f"已对接实例 {args.name}：{directory}\n容器 {args.container} 由它原来的服务管理，这里不会启动或停止它。")
+    return 0
+
+
+def run_in_tools(instance: Instance, arguments: list[str]) -> int:
+    """在工具镜像里跑一次导出类任务：无网络、内存有上限。宿主没有依赖或者内存紧时用它。"""
+    export = instance.config["export"]
+    uid, gid = instance.owner()
+    home = str(instances_root())
+    state = instance.state
+    if not state.exists():
+        state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        instance.give_to_owner(state)
+    command = ["docker", "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
+               "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+               "--memory", f"{int(export['container_memory_mb'])}m", "--cpus", "1", "--user", f"{uid}:{gid}",
+               "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m", "--env", "PYTHONPATH=/app", "--env", f"WES_HOME={home}",
+               "--env", f"SQLITE_TMPDIR={state}", "--env", "TZ=UTC",
+               "--mount", f"type=bind,src={instance.dir},dst={instance.dir}"]
+    if not instance.gui.is_relative_to(instance.dir):
+        command += ["--mount", f"type=bind,src={instance.gui},dst={instance.gui},readonly"]
+    if not instance.export_root.is_relative_to(instance.dir):
+        command += ["--mount", f"type=bind,src={instance.export_root},dst={instance.export_root}"]
+    command += [instance.config["send"]["tools_image"], "-m", "wechat_export_send.cli", *arguments]
+    return subprocess.call(command)
+
+
 def _compose(instance: Instance, *arguments: str) -> list[str]:
     return ["docker", "compose", "--project-name", f"wes-{instance.name}", "--project-directory", str(ROOT),
             "--env-file", str(instance.dir / "instance.env"), "-f", str(ROOT / "compose.yaml"), *arguments]
@@ -98,11 +162,9 @@ def _compose(instance: Instance, *arguments: str) -> list[str]:
 
 def instance_compose(args, *arguments: str) -> int:
     instance = Instance.load(args.name)
-    env = {}
-    for line in (instance.dir / "instance.env").read_text(encoding="utf-8").splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            env[key] = value
+    if not instance.config["desktop"]["managed"]:
+        raise ConfigError(f"实例 {instance.name} 对接的是已有容器 {instance.container}，由它原来的服务管理，这里不启停")
+    env = instance.env()
     if arguments[0] == "up" and not env.get("CLIENT_ROOT"):
         current = _current_client()
         if not current:
@@ -244,8 +306,14 @@ def keys_image(args) -> int:
 
 # ---- 导出 ----
 def export(args) -> int:
-    from . import exporter
     instance = Instance.load(args.instance)
+    if not args.in_process and (args.container or instance.config["export"]["runner"] == "container"):
+        while True:
+            code = run_in_tools(instance, ["export", "--instance", instance.name, "--in-process"])
+            if not args.watch:
+                return code
+            time.sleep(int(instance.config["export"]["interval_seconds"]))
+    from . import exporter
     while True:
         try:
             stats = exporter.export_instance(instance)
@@ -256,6 +324,16 @@ def export(args) -> int:
         if not args.watch:
             return 1 if stats["errors"] and not stats["new_lines"] and not stats["conversations"] else 0
         time.sleep(int(instance.config["export"]["interval_seconds"]))
+
+
+def verify_export(args) -> int:
+    instance = Instance.load(args.instance)
+    if not args.in_process and (args.container or instance.config["export"]["runner"] == "container"):
+        return run_in_tools(instance, ["verify-export", "--instance", instance.name, "--in-process"])
+    from . import verify
+    result = verify.verify_instance(instance)
+    _print_json(result)
+    return 0 if result["ok"] else 1
 
 
 def conversations(args) -> int:
@@ -339,6 +417,20 @@ def build_parser() -> argparse.ArgumentParser:
     action.add_argument("name")
     action.add_argument("--vnc-port", type=int)
     action.set_defaults(func=instance_create)
+    action = actions.add_parser("attach", help="对接已经在跑、已经登录的微信容器，不启停它")
+    action.add_argument("name")
+    action.add_argument("--container", required=True, help="桌面容器的名字")
+    action.add_argument("--gui", required=True, help="容器的 HOME 在宿主上的目录（含 xwechat_files），只读挂载")
+    action.add_argument("--keys", required=True, help="all_keys.json，复制一份进实例目录")
+    action.add_argument("--docker-host", help="桌面容器不在默认 dockerd 时填，例如 unix:///run/other.sock")
+    action.add_argument("--network", help="worker 的网络，默认 container:<容器>；容器用 host 网络时填 host")
+    action.add_argument("--image-key", help="可选：image_key.json。没有时从客户端配置里算")
+    action.add_argument("--display", help="X 显示，默认 :99")
+    action.add_argument("--account-dir", help="有多个账号目录时指定")
+    action.add_argument("--puid", type=int, help="容器用户，默认取 gui 目录的属主")
+    action.add_argument("--pgid", type=int)
+    action.add_argument("--runner", choices=["host", "container"], help="导出跑在宿主还是工具容器；宿主没有依赖时选 container")
+    action.set_defaults(func=instance_attach)
     actions.add_parser("list").set_defaults(func=instance_list)
     for verb, arguments in (("up", ("up", "-d")), ("down", ("down",)), ("status", ("ps",)), ("logs", ("logs", "--tail", "100"))):
         action = actions.add_parser(verb)
@@ -371,7 +463,15 @@ def build_parser() -> argparse.ArgumentParser:
     item = sub.add_parser("export", help="增量导出成 chat-export/v1")
     item.add_argument("--instance", required=True)
     item.add_argument("--watch", action="store_true", help="一直运行，间隔见 export.interval_seconds")
+    item.add_argument("--container", action="store_true", help="在工具容器里跑（无网络，内存上限 export.container_memory_mb）")
+    item.add_argument("--in-process", action="store_true", help=argparse.SUPPRESS)
     item.set_defaults(func=export)
+
+    item = sub.add_parser("verify-export", help="拿解密后的数据库核对导出的条数，只输出计数，不输出内容")
+    item.add_argument("--instance", required=True)
+    item.add_argument("--container", action="store_true")
+    item.add_argument("--in-process", action="store_true", help=argparse.SUPPRESS)
+    item.set_defaults(func=verify_export)
 
     item = sub.add_parser("conversations", help="列出已导出的会话：id、类型、条数、名字")
     item.add_argument("--instance", required=True)

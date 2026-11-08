@@ -3,17 +3,19 @@
 #   ./install.sh                装依赖（优先 .venv，退回 pip --target .deps）
 #   ./install.sh --no-deps      不装依赖，只检查（离线 demo 用纯 Python AES 也能跑）
 #   ./install.sh --images       额外构建工具镜像和桌面镜像（需要 Docker）
+#   ./install.sh --tools        只构建工具镜像（对接已有容器时不需要桌面镜像）
 #   ./install.sh --link DIR     把两个命令软链到 DIR（例如 /usr/local/bin）
 set -eu
 ROOT=$(cd "$(dirname "$0")" && pwd)
 cd "$ROOT"
-deps=1 images=0 link=""
+deps=1 images=0 tools=0 link=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-deps) deps=0 ;;
         --images) images=1 ;;
+        --tools) tools=1 ;;
         --link) shift; link=${1:?--link 需要一个目录} ;;
-        -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
         *) echo "未知参数：$1" >&2; exit 2 ;;
     esac
     shift
@@ -37,6 +39,9 @@ if [ "$deps" = 1 ]; then
         echo "警告：既没有 venv 也没有 pip，没装依赖。离线 demo 能跑，真实数据库请先装好：" >&2
         echo "  Debian/Ubuntu：apt-get install -y python3-venv，然后重新运行 ./install.sh" >&2
     fi
+fi
+if [ "$tools" = 1 ] && [ "$images" = 0 ]; then
+    docker build -t wechat-export-send-tools:local -f docker/tools/Dockerfile .
 fi
 if [ "$images" = 1 ]; then
     version=$(cat VERSION)

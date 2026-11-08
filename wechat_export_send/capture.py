@@ -331,15 +331,7 @@ def image_key_worker(args) -> int:
 
 # ---- 宿主 ----
 def _client_root(instance: Instance) -> Path:
-    env = {}
-    try:
-        for line in (instance.dir / "instance.env").read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                key, value = line.split("=", 1)
-                env[key.strip()] = value.strip()
-    except OSError:
-        pass
-    root = env.get("CLIENT_ROOT")
+    root = instance.env().get("CLIENT_ROOT")
     if not root:
         raise ConfigError("instance.env 里没有 CLIENT_ROOT；先运行 client install")
     return Path(root)
@@ -363,7 +355,7 @@ def host_run(instance: Instance, mode: str, *, timeout: int = 300, check: bool =
     for capability in capabilities:
         command += ["--cap-add", capability]
     command += ["--cap-add", "CHOWN", "--security-opt", "no-new-privileges:true", "--memory", "1536m", "--cpus", "1",
-                "--env", f"WES_UID={os.getuid()}", "--env", f"WES_GID={os.getgid()}", "--env", "PYTHONPATH=/app",
+                "--env", f"WES_UID={instance.owner()[0]}", "--env", f"WES_GID={instance.owner()[1]}", "--env", "PYTHONPATH=/app",
                 "--mount", f"type=bind,src={instance.gui},dst=/config,readonly",
                 "--mount", f"type=bind,src={keys_dir},dst=/scan",
                 "--mount", f"type=bind,src={_client_root(instance)}/opt/wechat,dst=/opt/wechat,readonly",

@@ -265,3 +265,27 @@ def test_locate_text_receipt_needs_unique_exact_match():
     image = {"local_id": 5, "server_id": 9, "create_time": 100, "origin_source": 1, "local_type": 3}
     assert locate_new_self_image({"s": [image]}, {"s": 4}, 100)["server_id"] == 9
     assert locate_new_self_image({"s": [image, {**image, "local_id": 6}]}, {"s": 4}, 100) is None
+
+
+def test_attached_instance_worker_network_and_owner(tmp_path, monkeypatch):
+    home = tmp_path / "instances"
+    directory = home / "second"
+    (directory / "keys").mkdir(parents=True)
+    (directory / "keys" / "all_keys.json").write_text("{}", encoding="utf-8")
+    (directory / "instance.env").write_text("PUID=1200\nPGID=1201\n", encoding="utf-8")
+    (directory / "config.json").write_text(json.dumps({"instance": "second", "gui_dir": str(tmp_path / "gui"),
+        "desktop": {"managed": False, "container": "other", "network": "host", "docker_host": "unix:///o.sock"}}), encoding="utf-8")
+    monkeypatch.setenv("WES_HOME", str(home))
+    instance = Instance.load("second")
+    command = host._docker_command(instance, instance.state, "n", calibrate=False)
+    assert command[command.index("--network") + 1] == "host"
+    assert command[command.index("--user") + 1] == "1200:1201"
+    assert any(f"src={tmp_path / 'gui'},dst=/config,readonly" in part for part in command)
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = "true\n"
+
+    monkeypatch.setattr(host.subprocess, "run", lambda *a, **k: calls.append(a[0]) or Result())
+    assert host._desktop_running(instance) and calls[0][:3] == ["docker", "-H", "unix:///o.sock"]

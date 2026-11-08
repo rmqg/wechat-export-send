@@ -245,7 +245,7 @@ def load_name2id(connection: sqlite3.Connection) -> dict[int, str]:
     return {int(row[0]): str(row[1]) for row in connection.execute("SELECT rowid, user_name FROM Name2Id") if row[1]}
 
 
-def read_messages(connection: sqlite3.Connection, table: str, *, after_local_id: int, since_ts: int) -> list[dict]:
+def read_messages(connection: sqlite3.Connection, table: str, *, after_local_id: int, since_ts: int):
     """取 local_id 大于游标的新行，以及回看窗口内的旧行（撤回和编辑会原地改旧行）。"""
     columns = {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
     missing = [column for column in MESSAGE_COLUMNS if column not in columns]
@@ -254,4 +254,4 @@ def read_messages(connection: sqlite3.Connection, table: str, *, after_local_id:
     wanted = ", ".join(f'"{column}"' for column in MESSAGE_COLUMNS)
     sql = (f'SELECT {wanted} FROM "{table}" WHERE local_id > ? OR create_time >= ? '
            "ORDER BY create_time, local_id")
-    return [dict(row) for row in connection.execute(sql, (after_local_id, since_ts))]
+    return (dict(row) for row in connection.execute(sql, (after_local_id, since_ts)))

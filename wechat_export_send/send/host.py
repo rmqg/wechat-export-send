@@ -153,16 +153,16 @@ def _worker_paths(instance: Instance, db_storage: Path, job_dir: Path, *, docker
 
 def _docker_command(instance: Instance, job_dir: Path, name: str, *, calibrate: bool) -> list[str]:
     send = instance.config["send"]
-    uid, gid = os.getuid(), os.getgid()
-    env = _read_env(instance.dir / "instance.env")
-    uid = int(env.get("PUID") or uid)
-    gid = int(env.get("PGID") or gid)
+    uid, gid = instance.owner()
     headers = instance.calibration_dir / "headers"
     evidence = instance.state / "send" / "evidence"
     headers.mkdir(parents=True, exist_ok=True, mode=0o700)
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
+    instance.give_to_owner(headers, recursive=True)
+    instance.give_to_owner(evidence, recursive=True)
+    instance.give_to_owner(job_dir, recursive=True)
     command = ["docker", "run", "--rm", "--pull", "never", "--name", name,
-               "--network", f"container:{instance.container}", "--read-only", "--user", f"{uid}:{gid}",
+               "--network", instance.worker_network(), "--read-only", "--user", f"{uid}:{gid}",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
                "--memory", f"{int(send.get('memory_mb', 768))}m", "--cpus", "1",
                "--tmpfs", f"/tmp:rw,nosuid,nodev,size={int(send.get('tmpfs_mb', 384))}m,mode=0700,uid={uid},gid={gid}",
@@ -176,21 +176,9 @@ def _docker_command(instance: Instance, job_dir: Path, name: str, *, calibrate: 
     return command
 
 
-def _read_env(path: Path) -> dict:
-    values = {}
+def _desktop_running(instance: Instance) -> bool:
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                key, value = line.split("=", 1)
-                values[key.strip()] = value.strip()
-    except OSError:
-        pass
-    return values
-
-
-def _desktop_running(container: str) -> bool:
-    try:
-        result = subprocess.run(["docker", "container", "inspect", "--format", "{{.State.Running}}", container],
+        result = subprocess.run([*instance.docker(), "container", "inspect", "--format", "{{.State.Running}}", instance.container],
                                 capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return False
@@ -379,7 +367,7 @@ def send(args) -> dict:
                                    detail="这个 request-id 上次的结果不确定，不会自动重发；请人工确认，确认没发出去后换一个 request-id")
             store.write({"request_id": request_id, "payload_sha256": payload_hash, "to": to, "status": "sending", "at": int(time.time())})
 
-        if instance.config["send"]["mode"] == "docker" and not _desktop_running(instance.container):
+        if instance.config["send"]["mode"] == "docker" and not _desktop_running(instance):
             outcome = {"status": "failed", "code": "desktop_unavailable", "detail": "桌面容器没有运行，确定没有发出去"}
         else:
             try:

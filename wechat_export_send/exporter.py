@@ -21,6 +21,7 @@ from . import __version__, media as media_mod, message_parse, sqlcipher, wcdb
 from .config import IdMapper, Instance, atomic_write, conversation_kind
 
 SCHEMA = "chat-export/v1"
+FLUSH_LINES = 5000  # 攒这么多行就落盘，库再大也不会把消息全留在内存里
 _DEFERRED = "deferred"
 
 
@@ -101,6 +102,8 @@ class Exporter:
         self.image_keys = image_keys
         self.state_root = Path(state_root) if state_root else self.root / "state"
         self.now = now
+        self._buffered = 0
+        self._known_senders: set[str] = set()
         self.stats = {"conversations": 0, "new_lines": 0, "rewritten_lines": 0, "media_ready": 0, "media_pending": 0,
                       "media_missing": 0, "shards_scanned": 0, "shards_skipped": 0, "errors": []}
 
@@ -193,6 +196,7 @@ class Exporter:
         try:
             tables = wcdb.table_names(connection)
             sender_ids = wcdb.load_name2id(connection)
+            self._known_senders = set(sender_ids.values()) | set(names)
             by_table = {wcdb.message_table(name): name for name in set(known) | set(sender_ids.values())}
             for table in sorted(name for name in tables if name.startswith("Msg_")):
                 username = by_table.get(table)
@@ -250,6 +254,11 @@ class Exporter:
             message = self._build_message(row, relative, username, kind, sender_ids, names, room, resources, attach_index or {})
             rewritten = key in recent and recent[key] != _DEFERRED
             batches.setdefault(conversation_id, []).append(message)
+            self._buffered += 1
+            if self._buffered >= FLUSH_LINES:
+                self._write_batches(batches, state)
+                batches.clear()
+                self._buffered = 0
             self.stats["rewritten_lines" if rewritten else "new_lines"] += 1
             if not rewritten:
                 conversation["message_count"] = int(conversation.get("message_count") or 0) + 1
@@ -265,9 +274,8 @@ class Exporter:
         base_type, subtype = wcdb.split_msg_type(row.get("local_type"))
         body = wcdb.decompress_content(row.get("message_content"), row.get("WCDB_CT_message_content"))
         packed = wcdb.decompress_content(row.get("compress_content"), None)
-        known = set(sender_ids.values())
         parsed = message_parse.parse_message(base_type, subtype, body if body is not None else packed,
-                                             sender_known=lambda value: kind == "group" and (value in known or value in names))
+                                             sender_known=lambda value: kind == "group" and value in self._known_senders)
         server_id = int(row.get("server_id") or 0)
         local_id = int(row.get("local_id") or 0)
         shard_no = Path(relative).stem.removeprefix("message_")
@@ -393,8 +401,9 @@ class Exporter:
         if not any(item.get("status") == "pending" for item in items):
             return
         days = int(self.settings.get("media", {}).get("pending_days") or 0)
-        if days <= 0:
-            return
+        now = int(self.now if self.now is not None else time.time())
+        if days <= 0 or int(message.get("ts") or 0) < now - days * 86400:
+            return  # 太旧的图不再等，否则第一次导出全部历史时待办表会撑爆
         body = wcdb.decompress_content(row.get("message_content"), row.get("WCDB_CT_message_content"))
         _, content = message_parse.split_group_sender(body)
         attributes = message_parse.parse_image_attrs(content)

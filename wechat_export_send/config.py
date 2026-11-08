@@ -18,6 +18,8 @@ CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 DEFAULTS: dict = {
     "instance": "",
     "account_dir": "",
+    "gui_dir": "",
+    "desktop": {"managed": True, "container": "", "docker_host": "", "network": ""},
     "export": {
         "root": "export",
         "timezone": "Asia/Shanghai",
@@ -28,6 +30,8 @@ DEFAULTS: dict = {
         "since": 0,
         "lookback_seconds": 3600,
         "interval_seconds": 300,
+        "runner": "host",
+        "container_memory_mb": 1024,
         "members": True,
         "media": {"enabled": True, "max_bytes": 104857600, "thumbnails": False, "files": True, "pending_days": 7},
     },
@@ -118,7 +122,44 @@ class Instance:
 
     @property
     def gui(self) -> Path:
-        return self.dir / "gui"
+        configured = self.config.get("gui_dir")
+        return Path(configured) if configured else self.dir / "gui"
+
+    def env(self) -> dict:
+        values = {}
+        try:
+            for line in (self.dir / "instance.env").read_text(encoding="utf-8").splitlines():
+                if "=" in line and not line.lstrip().startswith("#"):
+                    key, value = line.split("=", 1)
+                    values[key.strip()] = value.strip()
+        except OSError:
+            pass
+        return values
+
+    def owner(self) -> tuple[int, int]:
+        """容器里用哪个用户：和读得了 gui/ 的用户一致。"""
+        env = self.env()
+        return int(env.get("PUID") or os.getuid()), int(env.get("PGID") or os.getgid())
+
+    def give_to_owner(self, path: Path, *, recursive: bool = False) -> None:
+        """宿主用 root 运行时，把新建的东西交给容器用户，否则容器里写不进去。"""
+        if os.getuid() != 0:
+            return
+        uid, gid = self.owner()
+        path = Path(path)
+        os.chown(path, uid, gid)
+        if recursive and path.is_dir():
+            for parent, directories, files in os.walk(path):
+                for name in directories + files:
+                    os.chown(os.path.join(parent, name), uid, gid, follow_symlinks=False)
+
+    def docker(self) -> list[str]:
+        """查看桌面容器用的 docker 命令；桌面可能在另一个 dockerd 里。"""
+        host = self.config["desktop"]["docker_host"]
+        return ["docker", "-H", host] if host else ["docker"]
+
+    def worker_network(self) -> str:
+        return self.config["desktop"]["network"] or f"container:{self.container}"
 
     @property
     def keys_file(self) -> Path:
@@ -143,7 +184,7 @@ class Instance:
 
     @property
     def container(self) -> str:
-        return f"wes-{self.name}-desktop"
+        return self.config["desktop"]["container"] or f"wes-{self.name}-desktop"
 
     def calibration_file(self) -> Path:
         configured = self.config["send"]["calibration"]
@@ -177,13 +218,16 @@ class Instance:
         except FileNotFoundError:
             pass
         salt = secrets.token_hex(16)
-        self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not self.state.exists():
+            self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.give_to_owner(self.state)
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             return bytes.fromhex(path.read_text(encoding="ascii").strip())
         with os.fdopen(fd, "w", encoding="ascii") as out:
             out.write(salt + "\n")
+        self.give_to_owner(path)
         return bytes.fromhex(salt)
 
 
@@ -197,6 +241,8 @@ def validate(config: dict) -> dict:
     for key in ("lookback_seconds", "interval_seconds", "since"):
         if not isinstance(export[key], int) or export[key] < 0:
             raise ConfigError(f"export.{key} 应该是非负整数")
+    if export["runner"] not in {"host", "container"}:
+        raise ConfigError("export.runner 只能是 host 或 container")
     send = config["send"]
     if send["mode"] not in {"docker", "direct"}:
         raise ConfigError("send.mode 只能是 docker 或 direct")

@@ -95,10 +95,11 @@ def instance_checks(instance: Instance, items: list) -> None:
         except ValueError:
             _item(items, prefix + "导出清单", FAIL, "manifest.json 损坏", "再运行一次 export")
     if instance.config["send"]["mode"] == "docker" and shutil.which("docker"):
-        code, text = _run(["docker", "container", "inspect", "--format", "{{.State.Running}}", instance.container])
+        code, text = _run([*instance.docker(), "container", "inspect", "--format", "{{.State.Running}}", instance.container])
         running = code == 0 and text.strip() == "true"
         _item(items, prefix + "桌面容器", OK if running else WARN, instance.container + (" 运行中" if running else " 没有运行"),
-              "" if running else f"wechat-export-send instance up {instance.name}")
+              "" if running else (f"wechat-export-send instance up {instance.name}" if instance.config["desktop"]["managed"]
+                                  else "这个实例对接的是已有容器，由它原来的服务管理"))
         code, _ = _run(["docker", "image", "inspect", instance.config["send"]["tools_image"]])
         _item(items, prefix + "工具镜像", OK if code == 0 else WARN, instance.config["send"]["tools_image"],
               "" if code == 0 else "运行 ./install.sh --images")
@@ -135,7 +136,7 @@ def _key_checks(instance: Instance, storage: Path, items: list, prefix: str) -> 
 
 def _client_checks(instance: Instance, items: list, prefix: str) -> None:
     tested = tested_versions()
-    code, text = _run(["docker", "exec", instance.container, "sha256sum", "/opt/wechat/wechat"], 30)
+    code, text = _run([*instance.docker(), "exec", instance.container, "sha256sum", "/opt/wechat/wechat"], 30)
     digest = text.split()[0] if code == 0 and text else ""
     known = {item["executable_sha256"]: item["version"] for item in tested.get("clients", [])}
     if digest in known:

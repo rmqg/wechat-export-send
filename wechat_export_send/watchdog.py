@@ -57,9 +57,10 @@ def observe(instance: Instance) -> str:
     if instance.config["send"]["mode"] == "direct":
         value = probe(args[1], (int(main_size["width"]), int(main_size["height"])), (int(login["width"]), int(login["height"])))
         return value
-    command = ["docker", "run", "--rm", "--pull", "never", "--network", f"container:{instance.container}",
+    uid, gid = instance.owner()
+    command = ["docker", "run", "--rm", "--pull", "never", "--network", instance.worker_network(),
                "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "128m",
-               "--user", f"{os.getuid()}:{os.getgid()}", "--tmpfs", "/tmp:rw,nosuid,size=8m", "--env", "PYTHONPATH=/app",
+               "--user", f"{uid}:{gid}", "--tmpfs", "/tmp:rw,nosuid,size=8m", "--env", "PYTHONPATH=/app",
                instance.config["send"]["tools_image"], "-m", "wechat_export_send.watchdog", "--probe", *args]
     result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
     status = json.loads(result.stdout).get("status")
