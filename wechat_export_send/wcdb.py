@@ -167,7 +167,7 @@ def _protobuf_fields(data: bytes):
 def packed_resource_md5(packed_info) -> str | None:
     """消息行 packed_info_data 里缓存文件名用的 md5：protobuf 字段 3 里的字段 4，32 位十六进制。
 
-    这是对 4.1.13.26 观察到的结构（实测 1054 张图全部能对上文件名），不是公开规范；解不出就返回 None。
+    这是对 4.1.13.26 观察到的结构（真实库里的图片消息全部能对上文件名），不是公开规范；解不出就返回 None。
     """
     if isinstance(packed_info, memoryview):
         packed_info = packed_info.tobytes()

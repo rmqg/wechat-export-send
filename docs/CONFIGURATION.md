@@ -21,6 +21,16 @@
 |---|---|---|---|---|
 | `instance` | 字符串 | 目录名 | 实例名，决定容器名 `wes-<名字>-desktop` | 不用改 |
 | `account_dir` | 字符串 | `""` | `xwechat_files/` 下的账号目录名，如 `abc_1234` | 同一个客户端登录过多个账号时必须写，程序绝不猜 |
+| `gui_dir` | 字符串 | `""` | 客户端 HOME 的绝对路径。空时用实例目录下的 `gui/` | 对接已有容器时（`instance attach` 会写） |
+
+### desktop：桌面容器
+
+| 参数 | 类型 | 默认值 | 含义 | 什么时候改 |
+|---|---|---|---|---|
+| `desktop.managed` | 布尔 | `true` | 容器归不归这个实例管。`false` 时 `instance up/down` 拒绝执行 | 对接已有容器时 |
+| `desktop.container` | 字符串 | `""` | 容器名，空时是 `wes-<实例>-desktop` | 对接已有容器时 |
+| `desktop.docker_host` | 字符串 | `""` | 容器所在的 dockerd，如 `unix:///run/other.sock`；只用来查看它 | 容器不在默认 dockerd 时 |
+| `desktop.network` | 字符串 | `""` | worker 的 Docker 网络，空时是 `container:<容器>` | 容器用 host 网络时填 `host` |
 
 ### export：导出
 
@@ -35,6 +45,8 @@
 | `export.since` | 整数（Unix 秒） | `0` | 不导出比这更早的消息 | 不想导全部历史 |
 | `export.lookback_seconds` | 整数 | `3600` | 回看窗口：这段时间内的旧行会比较指纹，发现撤回、编辑就重写一行 | 消息多到每次回看太慢时调小；想跟上更晚的改动时调大 |
 | `export.interval_seconds` | 整数 | `300` | `export --watch` 的间隔 | 按需。用 systemd timer 时改 timer，不看这个 |
+| `export.runner` | `"host"` 或 `"container"` | `"host"` | 导出和核对跑在宿主还是工具容器（无网络，只读挂载） | 宿主没有 Python 依赖，或者想限制内存 |
+| `export.container_memory_mb` | 整数 | `1024` | 工具容器里导出的内存上限 | 库特别大时调大 |
 | `export.members` | 布尔 | `true` | 写不写 `members/*.json`（群成员的哈希 ID、昵称） | 不需要成员表 |
 | `export.media.enabled` | 布尔 | `true` | 处理不处理媒体。`false` 时不解图，图片消息的 `status` 只会是 `pending` 或 `missing` | 只要文字 |
 | `export.media.max_bytes` | 整数 | `104857600` | 超过这个大小的文件不复制（报 `missing`）。只管文件，不管图片 | 磁盘紧或要收大文件 |

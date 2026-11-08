@@ -186,6 +186,38 @@ echo '* * * * * /opt/wechat-export-send/bin/wechat-export-send watchdog --instan
 
 把实例放到别的磁盘：设环境变量 `WES_HOME=/data/wes`。客户端目录用 `WES_CLIENT_DIR`。
 
+## 对接已经在跑的微信容器
+
+已经有一个登录好的容器，不想动它时：
+
+```sh
+./install.sh --no-deps --tools     # 只要工具镜像；宿主没有 Python 依赖也行，导出跑在容器里
+./bin/wechat-export-send instance attach main \
+  --container 已有容器的名字 \
+  --gui 容器的 HOME 在宿主上的目录 \
+  --keys 已有的 all_keys.json \
+  --runner container
+./bin/wechat-export-send export --instance main
+./bin/wechat-export-send verify-export --instance main
+```
+
+- 客户端目录只读挂载，容器不会被启动或停止，`instance up/down` 会拒绝。
+- 密钥复制一份进实例目录。导出、状态都在实例目录。
+- 容器用户默认取 `--gui` 目录的属主。
+- 容器在另一个 dockerd 里：加 `--docker-host unix:///路径`。这时 worker 进不了它的网络命名空间，容器要用 host 网络，并加 `--network host`。
+- X 显示号不是 `:99`：加 `--display :100`。
+- `verify-export` 只输出计数，拿解密后的数据库核对条数。刚写入的消息可能让两边差几条，隔一会儿再跑。
+
+## 文件传输助手这类搜不到的会话
+
+有些账号的搜索不返回文件传输助手。先在 noVNC 里点开它，然后：
+
+```sh
+./bin/wechat-send --instance main --to 文件传输助手 --calibrate --current
+```
+
+当前打开的会话标题和模板一致时，发送不会再去搜索。所以发之前要保证它是打开的，不一致时会走搜索，搜不到就报 `failed`。
+
 ## 升级
 
 解压新版本，把 `instances/` 和 `client/` 搬过去（或者一直用 `WES_HOME`、`WES_CLIENT_DIR` 放在外面），重新 `./install.sh --images`，再 `instance up`。`conversation_id` 由实例的盐决定，不会因为升级改变。

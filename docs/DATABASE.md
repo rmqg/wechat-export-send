@@ -29,6 +29,8 @@ all_users/config/global_config{,.crc}   算图片密钥用的本地配置
 
 每页都先验 HMAC，认证失败、错误密钥、截断页一律报错，不输出半截数据库。
 
+**预分配的零页**：客户端会把消息库预分配到 30 MB，尾部的全零页还没用过，没有 HMAC。程序只放过文件尾部连续的零页；零页之后又出现内容算损坏。有人把用过的页抹零时，数据库头记的页数对不上，`quick_check` 会拒绝。
+
 ## WAL
 
 客户端可能把最近的提交留在 `-wal` 里，只解主库会漏最新的消息。`patch_wal` 校验 WAL 头和帧的校验和、页认证，只把**完整提交事务**的帧应用到解密副本，未提交的尾帧不用。主库和 WAL 必须来自同一时刻：程序复制前后比较 (大小, mtime, inode)，变了就重来，最多三次。
@@ -70,6 +72,8 @@ python3 -m wechat_export_send.sqlcipher \
 
 缺列时导出报 `unsupported message schema` 并停止。
 
+`local_id` 自增，但和 `create_time` 的顺序不一定一致（同步历史时会逆序）。不要假设按时间排序后 `local_id` 也递增。
+
 压缩：有 zstd 魔数或类型标记就用 zstd，否则依次试 zlib、gzip、raw deflate，都不是就当明文。
 
 ## 类型映射
@@ -102,8 +106,8 @@ python3 -m wechat_export_send.sqlcipher \
 
 ## 图片
 
-1. 从消息 XML 的 `<img md5= hdlength= length= cdnbigimgurl= cdnmidimgurl=>` 和资源库取得 md5。
-2. 在 `msg/attach/<md5(会话)>/` 下按文件名找 `<md5>.dat`、`_h`、`_W`（全尺寸）和 `_t`（缩略图）。
+1. 缓存文件名用的 md5 在消息行的 `packed_info_data` 里（protobuf 字段 3 的字段 4），**不是** XML 里的 `md5`。XML 的 `<img md5= hdlength= length= cdnbigimgurl= cdnmidimgurl=>` 用来校验是不是原图。
+2. 在 `msg/attach/<md5(会话)>/<年-月>/Img/` 下按文件名找 `<md5>.dat`、`_h`、`_W`（全尺寸）和 `_t`、`_<时间>_t`（缩略图）。
 3. `.dat` 有三种：
    - `07 08 V2 08 07` 开头：V2，15 字节头（4 字节 AES 段长度、4 字节 XOR 段长度），前段 AES-ECB，中段明文，尾段按字节异或
    - `07 08 V1 08 07` 开头：同样的版式，用固定公开密钥

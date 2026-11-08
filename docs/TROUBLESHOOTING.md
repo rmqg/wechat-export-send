@@ -114,6 +114,7 @@ docker exec wes-main-desktop sh -c 'ldd /opt/wechat/wechat | grep "not found"'
 | `target_ambiguous` | 有多个同名会话 | 用 `conversation_id` |
 | `search_ambiguous` | 搜索词还能匹配别的联系人 | 改一下群名或备注，让它不是别人名字的一部分 |
 | `header_not_calibrated` | 没有标题模板 | `wechat-send --to X --calibrate` |
+| `header_blank` | 校准时标题是空白，没有选中会话 | 第一条搜索结果可能是网页搜索。在 noVNC 里打开目标会话，再 `--calibrate --current` |
 | `header_mismatch` | 选中的会话和模板不一致 | 看 noVNC；群改名、改了头像或窗口布局变了就重新校准 |
 | `draft_not_empty` | 输入框里有草稿 | 在 noVNC 里清空。上一次 `failed` 在粘贴之后也可能留下草稿 |
 | `draft_mismatch` | 粘贴后读回的文字不一样 | 含有微信会替换的字符（比如某些表情）时可能发生；在 noVNC 里清空草稿，换个写法 |
@@ -136,6 +137,12 @@ docker exec wes-main-desktop sh -c 'ldd /opt/wechat/wechat | grep "not found"'
 
 **`Weixin client window not found`、`ambiguous`、`unexpected visible window/dialog`**
 看 noVNC：微信掉线了（登录窗口）？弹了对话框？关掉对话框再试。如果那是正常窗口，把它的标题加进 `allowed_visible_window_titles`。
+
+**主窗口不见了**
+Esc 会把微信主窗口收起来，程序不会按它，但你在 noVNC 里可能按到。容器里再启动一次客户端就能唤醒（单实例，不会多开）：`docker exec -d <容器> sh -c "cd /config; timeout 25 /opt/wechat/wechat --no-sandbox"`。
+
+**出现「Search」或 922×802 的网页窗口**
+点到了搜索下拉框里的网页搜索。关掉那个窗口，再调整 `search_result` 或者用 `--calibrate --current`。
 
 **校准的时候选中了错的会话**
 删掉 `calibration/headers/<id>.png`，确认搜索结果的第一条就是目标后重来；或者调 `search_result` 坐标。

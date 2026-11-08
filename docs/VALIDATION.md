@@ -5,7 +5,7 @@
 ## 环境
 
 - 宿主：macOS（arm64）上的 OrbStack，Docker Engine 29.4.0，内核 `7.0.14-orbstack`。amd64 容器经 Rosetta 转译，不是原生 x86_64。
-- 被测对象：用 `scripts/build-release.sh` 从候选 commit `1228d21` 构建的 release 包。这之后到打 tag 只改了 `docs/VALIDATION.md`、`docs/COMPATIBILITY.md` 和 README 的说明文字。
+- 被测对象：用 `scripts/build-release.sh` 构建的 release 包。第一到四节在第一次打 tag 时跑了四个组合；之后为真实账号修过代码，见第六节的复核。
 
 ## 一、干净容器矩阵
 
@@ -107,11 +107,38 @@ doctor 的 3 项警告都符合预期：架构是 aarch64；还没有账号目�
 | gitleaks（`zricethezav/gitleaks`，扫 git 历史） | 没有发现泄漏；`examples/synthetic/` 的公开测试向量已在 `.gitleaks.toml` 里说明 |
 | 发布前的私有词表 grep | 命中两处都不是真实数据：检查脚本自己的规则，`vendor/wcdb_key_tool` 的一句注释（`wxid_xxx`，第三方文件原样收录） |
 
-## 五、没有测的
+## 五、真实账号（第二账号，已登录）
+
+宿主：iStoreOS 24.10.8，Linux 6.6，Docker 27.3.1。用 release 包在宿主上安装，工具镜像本地构建。下面只记计数，真实数据没有离开这台机器。
+
+```sh
+./install.sh --no-deps --tools
+./bin/wechat-export-send instance attach verify2 --container <已有容器> --docker-host unix:///<另一个 dockerd> \
+  --network host --display :100 --gui <容器的 HOME> --keys <all_keys.json> --runner container
+./bin/wechat-export-send export --instance verify2           # --network none，--memory 1g
+./bin/wechat-export-send verify-export --instance verify2
+```
+
+结果：`verify-export` 的 `ok: true`，数据库行数和导出条数完全一致，0 个不一致的会话，0 行坏数据，没有未知发送者，导出的 `ready` 媒体都在磁盘上。源目录只读挂载。
+
+这一轮靠真实数据发现并修好（都有回归测试）：
+
+| 现象 | 原因 | 修法 |
+|---|---|---|
+| 解密报第 170 页 HMAC 失败 | 客户端把库预分配到 30 MB，尾部是全零页 | 只放过尾部连续的零页 |
+| 核对发现少了一百多条 | `local_id` 和时间顺序不一致，游标在扫描中前进 | 一轮内游标下限不变 |
+| 图片全部对不上文件 | 文件名的 md5 在 `packed_info_data` 里，不是 XML 的 | 解析 protobuf 3.4 |
+| 有发送者为 `unknown` 的消息 | 拍一拍没有真正的发送者 | 归为系统消息 |
+| 校准存下空白模板 | 第一条搜索结果可能是网页搜索，没打开会话 | 拒绝空白模板 |
+| 探针按 Esc 后主窗口消失 | 客户端把主窗口收起来 | 程序不按 Esc，文档写明唤醒方法 |
+
+发送：校准和窗口操作跑过，**还没有完成一次真实发送**。这个账号的搜索不返回文件传输助手，需要先在 noVNC 里把它打开（`--calibrate --current`）。
+
+## 六、没有测的
 
 **这些都没有做，不要当成支持：**
 
-- 登录真实账号；真实的 `keys capture`；对真实数据库跑导出器；向真实会话发送。本项目的规矩是测试不往任何群、任何人发消息，也不读现有的真实数据。拆分前的代码在这些环节跑过，重构后的代码没有
+- 真实的 `keys capture`；向真实会话完成发送。拆分前的代码在这些环节跑过，重构后的代码还没有
 - 原生 x86_64 宿主上跑这个 release 包（amd64 只经过 Rosetta）
 - `fetch-originals` 连真实 CDN（只用假的 HTTP 响应测过协议和校验）
 - systemd unit 和 procd 脚本实际启用
