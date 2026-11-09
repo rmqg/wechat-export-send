@@ -48,8 +48,8 @@
 | `export.runner` | `"host"` 或 `"container"` | `"host"` | 导出和核对跑在宿主还是工具容器（无网络，只读挂载） | 宿主没有 Python 依赖，或者想限制内存 |
 | `export.container_memory_mb` | 整数 | `1024` | 工具容器里导出的内存上限 | 库特别大时调大 |
 | `export.members` | 布尔 | `true` | 写不写 `members/*.json`（群成员的哈希 ID、昵称） | 不需要成员表 |
-| `export.avatars` | 布尔 | `true` | 导不导头像：先用客户端本地的 `head_image.db`，没有的再按下面的设置下载，写进 `media/`，填成员的 `avatar` 和会话的 `avatar` | 不想在导出里留头像 |
-| `export.avatar_download.enabled` | 布尔 | `true` | 本地没有的头像要不要按联系人库里的链接下载。只访问微信头像域名 | 服务器不允许访问外网，或不想发这些请求 |
+| `export.avatars` | 布尔 | `true` | 导不导头像：每次导出都比对联系人库的最新头像链接和本地 `head_image.db` 的更新时间，谁新用谁，写进 `media/`，填成员的 `avatar` 和会话的 `avatar`。链接变了优先下载，下载成功前继续用旧头像 | 不想在导出里留头像 |
+| `export.avatar_download.enabled` | 布尔 | `true` | 要不要按联系人库里的链接下载头像。只访问微信头像域名 | 服务器不允许访问外网，或不想发这些请求 |
 | `export.avatar_download.per_run` | 整数 | `20` | 每次导出之后最多下载几个 | 想更快补齐用 `fetch-avatars --limit` |
 | `export.avatar_download.delay_seconds` | 数字 | `0.5` | 两次下载之间的间隔（秒） | 一般不用改 |
 | `export.avatar_download.max_seconds` | 数字 | `60` | 每次下载最多运行多久（秒） | 导出间隔很短时调小 |

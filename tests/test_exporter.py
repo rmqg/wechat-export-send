@@ -117,11 +117,11 @@ def _with_contact_urls(monkeypatch, urls: dict):
 
 def test_avatar_missing_locally_is_queued_then_merged(account, monkeypatch):
     root, info = account
-    _with_contact_urls(monkeypatch, {synthetic.CEN: AVATAR_URL, synthetic.ALICE: AVATAR_URL + "/served-locally"})
+    _with_contact_urls(monkeypatch, {synthetic.CEN: AVATAR_URL})
     stats = run(root, info)
     state = root / "export" / "state"
     queue = json.loads((state / avatars.QUEUE_FILE).read_text(encoding="utf-8"))
-    assert [item["urls"] for item in queue.values()] == [[AVATAR_URL]] and stats["avatars_queued"] == 1  # 本地有的不排队
+    assert [item["urls"] for item in queue.values()] == [[AVATAR_URL]] and stats["avatars_queued"] == 1
     assert "avatar" not in _group_export(root)[1][IdMapper(b"test-salt", "hash").sender(synthetic.CEN)]
 
     calls = []
@@ -140,6 +140,82 @@ def test_avatar_url_outside_wechat_is_never_queued(account, monkeypatch):
     _with_contact_urls(monkeypatch, {synthetic.CEN: "https://example.com/a.png"})
     run(root, info)
     assert json.loads((root / "export" / "state" / avatars.QUEUE_FILE).read_text(encoding="utf-8")) == {}
+
+
+def _set_contact_url(monkeypatch, username: str, url: str):
+    _with_contact_urls(monkeypatch, {username: url})
+
+
+def test_changed_avatar_url_is_refreshed_and_old_kept_until_then(account, monkeypatch):
+    """模拟换头像：链接变了就优先下载，下载成功前用旧头像，成功后换成新的。"""
+    root, info = account
+    state = root / "export" / "state"
+    sender = IdMapper(b"test-salt", "hash").sender(synthetic.CEN)
+    old_picture, new_picture = synthetic._png(32, 32, 11), synthetic._png(32, 32, 222)
+    _set_contact_url(monkeypatch, synthetic.CEN, AVATAR_URL + "/old")
+    run(root, info)
+    avatars.download_pending(root / "export", state, fetcher=lambda u, t: old_picture)
+    run(root, info, now=NOW + 120)
+    first = _group_export(root)[1][sender]["avatar"]
+    assert (root / "export" / first).read_bytes() == old_picture
+
+    monkeypatch.undo()
+    _set_contact_url(monkeypatch, synthetic.CEN, AVATAR_URL + "/new")
+    stats = run(root, info, now=NOW + 240)
+    assert stats["avatars_queued"] == 1
+    assert _group_export(root)[1][sender]["avatar"] == first  # 新头像还没下载到，先用旧的
+    queue = json.loads((state / avatars.QUEUE_FILE).read_text(encoding="utf-8"))
+    assert [item["changed"] for item in queue.values() if AVATAR_URL + "/new" in item["urls"]] == [True]
+
+    avatars.download_pending(root / "export", state, fetcher=lambda u, t: new_picture)
+    run(root, info, now=NOW + 360)
+    current = _group_export(root)[1][sender]["avatar"]
+    assert current != first and (root / "export" / current).read_bytes() == new_picture
+
+
+def test_changed_avatar_jumps_the_queue(tmp_path):
+    export, state = _queue(tmp_path, 5)
+    queue = json.loads((state / avatars.QUEUE_FILE).read_text(encoding="utf-8"))
+    queue["fp4"]["changed"] = True
+    (state / avatars.QUEUE_FILE).write_text(json.dumps(queue), encoding="utf-8")
+    calls = []
+    avatars.download_pending(export, state, limit=1, fetcher=lambda u, t: calls.append(u) or synthetic._png(8, 8, 1))
+    assert calls == [f"{AVATAR_URL}/4"]
+
+
+def test_downloaded_link_beats_stale_local_cache(account, monkeypatch):
+    """本地缓存更旧时不会盖住按新链接下载到的头像；本地更新得比下载晚，才用本地的。"""
+    root, info = account
+    state = root / "export" / "state"
+    sender = IdMapper(b"test-salt", "hash").sender(synthetic.ALICE)
+    fresh = synthetic._png(32, 32, 123)
+    _set_contact_url(monkeypatch, synthetic.ALICE, AVATAR_URL + "/fresh")
+    run(root, info)
+    avatars.download_pending(root / "export", state, fetcher=lambda u, t: fresh)
+    run(root, info, now=NOW + 120)  # 合成库里本地头像 update_time 是 0，比下载旧
+    assert (root / "export" / _group_export(root)[1][sender]["avatar"]).read_bytes() == fresh
+
+    original = wcdb.load_head_images
+    newer = synthetic._png(32, 32, 88)
+    monkeypatch.setattr(wcdb, "load_head_images", lambda path: {**original(path),
+                        synthetic.ALICE: {"data": newer, "update_time": int(time.time()) + 100}})
+    run(root, info, now=NOW + 240)
+    assert (root / "export" / _group_export(root)[1][sender]["avatar"]).read_bytes() == newer
+
+
+def test_forced_refresh_replaces_avatar_and_failure_keeps_old(tmp_path):
+    export, state = _queue(tmp_path, 2)
+    old, new = synthetic._png(8, 8, 5), synthetic._png(8, 8, 200)
+    avatars.download_pending(export, state, fetcher=lambda u, t: old, sleeper=lambda s: None)
+    before = json.loads((state / avatars.DONE_FILE).read_text(encoding="utf-8"))
+    failed = avatars.download_pending(export, state, force={"u0"}, fetcher=lambda u, t: None, sleeper=lambda s: None)
+    assert failed["refresh_failed"] == 1 and json.loads((state / avatars.DONE_FILE).read_text(encoding="utf-8")) == before
+    calls = []
+    result = avatars.download_pending(export, state, force={"u0", "not-a-member"}, limit=0,
+                                      fetcher=lambda u, t: calls.append(u) or new, sleeper=lambda s: None)
+    assert result["refreshed"] == 1 and calls == [f"{AVATAR_URL}/0"]
+    entry = json.loads((state / avatars.DONE_FILE).read_text(encoding="utf-8"))["fp0"]
+    assert (export / entry["path"]).read_bytes() == new and entry["at"] > 0
 
 
 def _queue(tmp_path: Path, count: int = 1) -> tuple[Path, Path]:

@@ -29,6 +29,7 @@ IMAGE_FORMATS = {"jpg", "png", "gif", "webp"}
 QUEUE_FILE = "avatar-queue.json"
 DONE_FILE = "avatar-downloads.json"
 BACKOFF_FILE = "avatar-backoff.json"
+SEEN_FILE = "avatar-seen.json"
 LOCK_FILE = "avatar-download.lock"
 BACKOFF_BASE_SECONDS = 3600
 BACKOFF_MAX_SECONDS = 7 * 86400
@@ -122,6 +123,14 @@ def _usable(data: bytes | None) -> tuple[bytes, str] | None:
     return data, fmt
 
 
+def _first_usable(item: dict, fetcher, timeout: float) -> tuple[bytes, str] | None:
+    for url in item.get("urls") or []:
+        found = _usable(fetcher(url, timeout))
+        if found:
+            return found
+    return None
+
+
 def _load(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -132,6 +141,15 @@ def _load(path: Path) -> dict:
 
 def _save(path: Path, value: dict) -> None:
     atomic_write(path, json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def done_entry(value) -> dict | None:
+    """下载记录：{path, at}。旧版只记了路径，当成很早以前下载的。"""
+    if isinstance(value, str):
+        return {"path": value, "at": 0}
+    if isinstance(value, dict) and isinstance(value.get("path"), str):
+        return {"path": value["path"], "at": float(value.get("at") or 0)}
+    return None
 
 
 def _due(fingerprint: str, done: dict, backoff: dict, now: float) -> bool:
@@ -157,12 +175,15 @@ def has_due(state_root: Path | str, now: float | None = None) -> bool:
 
 def download_pending(export_root: Path | str, state_root: Path | str, *, limit: int = 20, delay: float = 0.5,
                      max_seconds: float = 60, timeout: float = 5, now: float | None = None,
-                     fetcher=fetch, sleeper=time.sleep, clock=time.monotonic) -> dict:
-    """下载队列里到期的头像。失败的按小时翻倍退避，最长 7 天；成功的写进 media/，下一次导出时合并。"""
+                     fetcher=fetch, sleeper=time.sleep, clock=time.monotonic, force: set[str] | None = None) -> dict:
+    """下载队列里到期的头像，换了头像的排最前面。失败的按小时翻倍退避，最长 7 天；成功的写进 media/，下一次导出时合并。
+
+    force 里的成员不管下载过没有、在不在退避，都重新下载一次（日报生成前用）。失败时继续用旧头像，也不进退避。"""
     from . import media as media_mod
 
     export_root, state_root = Path(export_root), Path(state_root)
-    stats = {"queued": 0, "downloaded": 0, "failed": 0, "waiting": 0, "busy": False}
+    stats = {"queued": 0, "downloaded": 0, "failed": 0, "waiting": 0, "busy": False,
+             "forced": 0, "refreshed": 0, "refresh_failed": 0}
     lock_path = state_root / LOCK_FILE
     with lock_path.open("a") as lock:
         os.chmod(lock_path, 0o600)
@@ -176,7 +197,24 @@ def download_pending(export_root: Path | str, state_root: Path | str, *, limit: 
         started, tried = clock(), 0
         stats["queued"] = len(queue)
         try:
-            for fingerprint, item in sorted(queue.items()):
+            wanted = set(force or ())
+            forced = sorted(fp for fp, item in queue.items() if wanted & set(item.get("targets") or []))
+            for fingerprint in forced:
+                if clock() - started >= max_seconds:
+                    stats["refresh_failed"] += 1
+                    continue
+                if stats["forced"]:
+                    sleeper(delay)
+                stats["forced"] += 1
+                found = _first_usable(queue[fingerprint], fetcher, timeout)
+                if found is None:
+                    stats["refresh_failed"] += 1
+                    continue
+                relative, _ = media_mod.store_content(export_root, found[0], found[1])
+                done[fingerprint] = {"path": relative, "at": moment}
+                backoff.pop(fingerprint, None)
+                stats["refreshed"] += 1
+            for fingerprint, item in sorted(queue.items(), key=lambda pair: (not pair[1].get("changed"), pair[0])):
                 if fingerprint in done:
                     continue
                 if not _due(fingerprint, done, backoff, moment):
@@ -185,14 +223,10 @@ def download_pending(export_root: Path | str, state_root: Path | str, *, limit: 
                 if tried >= limit or clock() - started >= max_seconds:
                     stats["waiting"] += 1
                     continue
-                if tried:
+                if tried or stats["forced"]:
                     sleeper(delay)
                 tried += 1
-                found = None
-                for url in item.get("urls") or []:
-                    found = _usable(fetcher(url, timeout))
-                    if found:
-                        break
+                found = _first_usable(item, fetcher, timeout)
                 if found is None:
                     attempts = int((backoff.get(fingerprint) or {}).get("attempts") or 0) + 1
                     wait = min(BACKOFF_BASE_SECONDS * 2 ** (attempts - 1), BACKOFF_MAX_SECONDS)
@@ -200,7 +234,7 @@ def download_pending(export_root: Path | str, state_root: Path | str, *, limit: 
                     stats["failed"] += 1
                     continue
                 relative, _ = media_mod.store_content(export_root, found[0], found[1])
-                done[fingerprint] = relative
+                done[fingerprint] = {"path": relative, "at": moment}
                 backoff.pop(fingerprint, None)
                 stats["downloaded"] += 1
         finally:
@@ -217,9 +251,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delay", type=float, default=0.5)
     parser.add_argument("--max-seconds", type=float, default=60)
     parser.add_argument("--timeout", type=float, default=5)
+    parser.add_argument("--force-file", help="每行一个导出 ID：这些成员重新下载一次")
     args = parser.parse_args(argv)
+    force = set(Path(args.force_file).read_text(encoding="utf-8").split()) if args.force_file else None
     stats = download_pending(args.export_root, args.state_root, limit=args.limit, delay=args.delay,
-                             max_seconds=args.max_seconds, timeout=args.timeout)
+                             max_seconds=args.max_seconds, timeout=args.timeout, force=force)
     print(json.dumps(stats, ensure_ascii=False))
     return 0
 

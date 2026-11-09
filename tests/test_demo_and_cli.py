@@ -307,7 +307,7 @@ def test_container_runner_command_is_locked_down(tmp_path, monkeypatch, capsys):
     existing, instance = _attached(tmp_path, monkeypatch, capsys, runner="container", puid="1200", pgid="1201")
     seen = {}
 
-    def fake_call(command):
+    def fake_call(command, **kwargs):
         seen["command"] = command
         return 0
 

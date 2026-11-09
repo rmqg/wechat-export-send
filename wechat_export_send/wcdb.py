@@ -119,16 +119,18 @@ def load_contacts(path: Path | None) -> dict[str, dict]:
     return result
 
 
-def load_head_images(path: Path | None) -> dict[str, bytes]:
-    """username -> 头像图片字节（客户端本地缓存，只有最近显示过的人才有）。"""
+def load_head_images(path: Path | None) -> dict[str, dict]:
+    """username -> {data, update_time}（客户端本地缓存，只有最近显示过的人才有）。"""
     tables = {row["name"] for row in _rows(path, "SELECT name FROM sqlite_master WHERE type='table'")}
     if "head_image" not in tables:
         return {}
     columns = {row["name"] for row in _rows(path, 'PRAGMA table_info("head_image")')}
     if not {"username", "image_buffer"} <= columns:
         return {}
-    rows = _rows(path, "SELECT username, image_buffer FROM head_image WHERE length(image_buffer) > 0")
-    return {str(row["username"]): bytes(row["image_buffer"]) for row in rows if row["username"]}
+    updated = "update_time" if "update_time" in columns else "0"
+    rows = _rows(path, f"SELECT username, image_buffer, {updated} AS updated FROM head_image WHERE length(image_buffer) > 0")
+    return {str(row["username"]): {"data": bytes(row["image_buffer"]), "update_time": int(row["updated"] or 0)}
+            for row in rows if row["username"]}
 
 
 def load_sessions(path: Path | None) -> dict[str, dict]:

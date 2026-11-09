@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import io
 import json
@@ -133,7 +134,7 @@ def instance_attach(args) -> int:
     return 0
 
 
-def run_in_tools(instance: Instance, arguments: list[str]) -> int:
+def run_in_tools(instance: Instance, arguments: list[str], stdout=None) -> int:
     """在工具镜像里跑一次导出类任务：无网络、内存有上限。宿主没有依赖或者内存紧时用它。"""
     export = instance.config["export"]
     uid, gid = instance.owner()
@@ -153,7 +154,7 @@ def run_in_tools(instance: Instance, arguments: list[str]) -> int:
     if not instance.export_root.is_relative_to(instance.dir):
         command += ["--mount", f"type=bind,src={instance.export_root},dst={instance.export_root}"]
     command += [instance.config["send"]["tools_image"], "-m", "wechat_export_send.cli", *arguments]
-    return subprocess.call(command)
+    return subprocess.call(command, stdout=stdout)
 
 
 def _compose(instance: Instance, *arguments: str) -> list[str]:
@@ -306,28 +307,41 @@ def keys_image(args) -> int:
 
 
 # ---- 导出 ----
-def _avatar_download(instance: Instance, *, limit: int | None = None, max_seconds: float | None = None) -> int:
-    """下载头像。容器模式下用单独的容器，只挂导出目录，拿不到密钥和数据库。输出走 stderr，stdout 留给 export 的 JSON。"""
-    from . import avatars
-
+def _avatar_arguments(instance: Instance, limit: int, max_seconds: float | None, force_file: Path | None) -> list[str]:
     settings = instance.config["export"]["avatar_download"]
-    state_root = instance.state / "export"
-    arguments = ["--export-root", str(instance.export_root), "--state-root", str(state_root),
-                 "--limit", str(settings["per_run"] if limit is None else limit),
+    arguments = ["--export-root", str(instance.export_root), "--state-root", str(instance.state / "export"), "--limit", str(limit),
                  "--delay", str(settings["delay_seconds"]),
                  "--max-seconds", str(settings["max_seconds"] if max_seconds is None else max_seconds),
                  "--timeout", str(settings["timeout_seconds"])]
-    if instance.config["export"]["runner"] != "container":
-        return avatars.main(arguments)
+    return arguments + ["--force-file", str(force_file)] if force_file is not None else arguments
+
+
+def _avatar_download_command(instance: Instance, limit: int, max_seconds: float | None, force_file: Path | None) -> list[str]:
+    """单独的下载容器：只挂导出目录，拿不到密钥和数据库。"""
     uid, gid = instance.owner()
-    return subprocess.call(
-        ["docker", "run", "--rm", "--pull", "never", "--network", settings["network"], "--read-only",
-         "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "0.5",
-         "--user", f"{uid}:{gid}", "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m", "--env", "PYTHONPATH=/app", "--env", "TZ=UTC",
-         "--mount", f"type=bind,src={instance.export_root},dst={instance.export_root}",
-         "--mount", f"type=bind,src={state_root},dst={state_root}",
-         instance.config["send"]["tools_image"], "-m", "wechat_export_send.avatars", *arguments],
-        stdout=sys.stderr)
+    state_root = instance.state / "export"
+    return ["docker", "run", "--rm", "--pull", "never", "--network", instance.config["export"]["avatar_download"]["network"],
+            "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "0.5",
+            "--user", f"{uid}:{gid}", "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m", "--env", "PYTHONPATH=/app", "--env", "TZ=UTC",
+            "--mount", f"type=bind,src={instance.export_root},dst={instance.export_root}",
+            "--mount", f"type=bind,src={state_root},dst={state_root}",
+            instance.config["send"]["tools_image"], "-m", "wechat_export_send.avatars",
+            *_avatar_arguments(instance, limit, max_seconds, force_file)]
+
+
+def _avatar_download(instance: Instance, *, limit: int | None = None, max_seconds: float | None = None,
+                     force_file: Path | None = None) -> tuple[int, str]:
+    """下载头像，返回 (退出码, 计数 JSON)。stdout 留给调用方自己的输出。"""
+    from . import avatars
+
+    count = instance.config["export"]["avatar_download"]["per_run"] if limit is None else limit
+    if instance.config["export"]["runner"] != "container":
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = avatars.main(_avatar_arguments(instance, count, max_seconds, force_file))
+        return code, output.getvalue()
+    completed = subprocess.run(_avatar_download_command(instance, count, max_seconds, force_file), stdout=subprocess.PIPE, text=True)
+    return completed.returncode, completed.stdout
 
 
 def _download_avatars_quietly(instance: Instance) -> None:
@@ -339,13 +353,60 @@ def _download_avatars_quietly(instance: Instance) -> None:
         return
     try:
         if avatars.has_due(instance.state / "export"):
-            _avatar_download(instance)
+            print(_avatar_download(instance)[1], end="", file=sys.stderr)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"头像下载没有完成：{type(exc).__name__}", file=sys.stderr)
 
 
+def _export_for_refresh(instance: Instance) -> int:
+    """导出一次，别的导出正在运行时等一会儿再试。输出走 stderr。"""
+    for attempt in range(6):
+        if instance.config["export"]["runner"] == "container":
+            code = run_in_tools(instance, ["export", "--instance", instance.name, "--in-process"], stdout=sys.stderr)
+        else:
+            from . import exporter
+            try:
+                exporter.export_instance(instance)
+                code = 0
+            except exporter.ExportBusy:
+                code = 3
+        if code != 3 or attempt == 5:
+            return code
+        time.sleep(10)
+    return 3
+
+
+def refresh_avatars(args) -> int:
+    """日报生成前调用：导出拿到最新链接，重新下载指定成员的头像，再导出一次写进 members。失败的继续用旧头像。"""
+    instance = Instance.load(args.instance)
+    export = instance.config["export"]
+    ids = sorted(set(Path(args.ids_file).read_text(encoding="utf-8").split()))
+    result = {"requested": len(ids), "first_export": None, "download": None, "second_export": None}
+    if not export.get("avatars") or not export["avatar_download"]["enabled"]:
+        _print_json({**result, "status": "disabled"})
+        return 0
+    state_root = instance.state / "export"
+    result["first_export"] = _export_for_refresh(instance)
+    force_file = state_root / "avatar-force.txt"
+    atomic_write(force_file, "\n".join(ids) + "\n")
+    instance.give_to_owner(force_file)
+    try:
+        code, text = _avatar_download(instance, limit=0, max_seconds=args.max_seconds, force_file=force_file)
+    finally:
+        force_file.unlink(missing_ok=True)
+    try:
+        result["download"] = json.loads(text.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        result["download"] = {"error": "no_stats", "code": code}
+    result["second_export"] = _export_for_refresh(instance)
+    _print_json({**result, "status": "ok" if code == 0 and result["second_export"] == 0 else "partial"})
+    return 0 if code == 0 and result["second_export"] == 0 else 1
+
+
 def fetch_avatars(args) -> int:
-    return _avatar_download(Instance.load(args.instance), limit=args.limit, max_seconds=args.max_seconds)
+    code, text = _avatar_download(Instance.load(args.instance), limit=args.limit, max_seconds=args.max_seconds)
+    print(text, end="")
+    return code
 
 
 def export(args) -> int:
@@ -534,6 +595,12 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--limit", type=int, help="这次最多下载几个")
     item.add_argument("--max-seconds", type=float, help="这次最多运行多少秒")
     item.set_defaults(func=fetch_avatars)
+
+    item = sub.add_parser("refresh-avatars", help="重新下载指定成员的头像（日报生成前用），失败的继续用旧头像")
+    item.add_argument("--instance", default="main")
+    item.add_argument("--ids-file", required=True, help="每行一个导出 ID（成员或会话）")
+    item.add_argument("--max-seconds", type=float, default=150, help="下载最多运行多少秒")
+    item.set_defaults(func=refresh_avatars)
 
     item = sub.add_parser("fetch-originals", help="可选：从腾讯 CDN 下载 pending 的原图（默认关闭）")
     item.add_argument("--instance", required=True)

@@ -92,8 +92,8 @@ class Source:
             plain.unlink(missing_ok=True)
         return contacts, sessions, rooms
 
-    def head_images(self) -> dict[str, bytes]:
-        """客户端本地缓存的头像：账号 -> 图片字节。库不存在或没有密钥时返回空。"""
+    def head_images(self) -> dict[str, dict]:
+        """客户端本地缓存的头像：账号 -> {data, update_time}。库不存在或没有密钥时返回空。"""
         plain = self.decrypt("head_image/head_image.db")
         if plain is None:
             return {}
@@ -488,42 +488,23 @@ class Exporter:
                 out.flush()
                 os.fsync(out.fileno())
 
-    def _queue_avatar_downloads(self, names: dict, served: set[str], targets_for, known: dict[str, str]) -> None:
-        """本地没有缓存的头像排进下载队列；已经下载好的合并进来。链接变了（换头像）会重新下载。"""
-        if not (self.settings.get("avatar_download") or {}).get("enabled"):
-            return
+    def _read_state(self, name: str) -> dict:
         try:
-            done = json.loads((self.state_root / avatars_mod.DONE_FILE).read_text(encoding="utf-8"))
+            value = json.loads((self.state_root / name).read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            done = {}
-        done = done if isinstance(done, dict) else {}
-        queue: dict[str, dict] = {}
-        for username, contact in names.items():
-            urls = [url for url in contact.get("head_urls") or [] if avatars_mod.url_allowed(url)]
-            targets = targets_for(username) if username not in served and urls else []
-            if not targets:
-                continue
-            fingerprint = hashlib.sha256(json.dumps([urls, contact.get("head_md5") or ""]).encode()).hexdigest()[:32]
-            queue[fingerprint] = {"urls": urls, "targets": targets}
-            relative = done.get(fingerprint)
-            if isinstance(relative, str) and (self.root / relative).is_file():
-                known.update(dict.fromkeys(targets, relative))
-        atomic_write(self.state_root / avatars_mod.QUEUE_FILE, json.dumps(queue, ensure_ascii=False, separators=(",", ":")))
-        self.stats["avatars_queued"] = sum(1 for fingerprint in queue if fingerprint not in done)
+            return {}
+        return value if isinstance(value, dict) else {}
 
     def _store_avatars(self, state: dict, rooms: dict, names: dict) -> dict[str, str]:
-        """把用得上的头像写进 media/，返回 {成员或会话的导出 ID: 相对路径}。
+        """每次导出都重新比对：联系人库的最新链接、本地头像的更新时间、已下载的版本，谁新用谁。
 
-        客户端的头像缓存会被淘汰，读库也可能失败，所以之前导出过的路径记在 state 里继续用。"""
+        返回 {成员或会话的导出 ID: 相对路径}。链接变了就排进下载队列并优先下载，下载成功之前继续用旧头像；
+        只有读不到任何头像时才沿用上一次的路径，客户端缓存被淘汰、读库失败也不会丢头像。"""
         if not self.settings.get("avatars"):
             return {}
         path = self.state_root / "avatars.json"
-        try:
-            saved = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            saved = {}
-        known = {key: value for key, value in saved.items()
-                 if isinstance(value, str) and (self.root / value).is_file()} if isinstance(saved, dict) else {}
+        saved = self._read_state("avatars.json")
+        known = {key: value for key, value in saved.items() if isinstance(value, str) and (self.root / value).is_file()}
         exported = state["conversations"]
         accounts: set[str] = set()
         for username, room in rooms.items():
@@ -535,19 +516,44 @@ class Exporter:
             conversation_id = self.mapper.conversation(username, conversation_kind(username))
             return targets + [conversation_id] if conversation_id in exported else targets
 
-        served: set[str] = set()
+        heads: dict[str, dict] = {}
         try:
-            for username, data in self.source.head_images().items():
-                targets = targets_for(username)
-                fmt = media_mod.detect_image_format(data)
-                if not targets or len(data) > MAX_AVATAR_BYTES or fmt not in _AVATAR_FORMATS:
-                    continue
-                relative, _ = media_mod.store_content(self.root, data, fmt)
-                known.update(dict.fromkeys(targets, relative))
-                served.add(username)
+            heads = self.source.head_images()
         except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
             self.stats["errors"].append({"shard": "head_image/head_image.db", "error": type(exc).__name__})
-        self._queue_avatar_downloads(names, served, targets_for, known)
+        download = bool((self.settings.get("avatar_download") or {}).get("enabled"))
+        done = self._read_state(avatars_mod.DONE_FILE) if download else {}
+        seen = self._read_state(avatars_mod.SEEN_FILE)
+        queue: dict[str, dict] = {}
+        for username in set(names) | set(heads):
+            targets = targets_for(username)
+            if not targets:
+                continue
+            contact = names.get(username) or {}
+            urls = [url for url in contact.get("head_urls") or [] if avatars_mod.url_allowed(url)] if download else []
+            fingerprint = hashlib.sha256(json.dumps([urls, contact.get("head_md5") or ""]).encode()).hexdigest()[:32] if urls else ""
+            remote = avatars_mod.done_entry(done.get(fingerprint))
+            if remote and not (self.root / remote["path"]).is_file():
+                remote = None
+            local = heads.get(username)
+            fmt = media_mod.detect_image_format(local["data"]) if local and len(local["data"]) <= MAX_AVATAR_BYTES else None
+            if fmt in _AVATAR_FORMATS and (remote is None or local["update_time"] > remote["at"]):
+                relative, _ = media_mod.store_content(self.root, local["data"], fmt)
+                known.update(dict.fromkeys(targets, relative))
+            elif remote:
+                known.update(dict.fromkeys(targets, remote["path"]))
+            if urls:
+                changed = any(seen.get(target) not in (None, fingerprint) for target in targets)
+                item = queue.setdefault(fingerprint, {"urls": urls, "targets": [], "changed": False})
+                item["targets"] = sorted(set(item["targets"]) | set(targets))
+                item["changed"] = item["changed"] or (changed and not remote)
+                for target in targets:
+                    if remote or target not in seen:
+                        seen[target] = fingerprint
+        if download:
+            atomic_write(self.state_root / avatars_mod.QUEUE_FILE, json.dumps(queue, ensure_ascii=False, separators=(",", ":")))
+            self.stats["avatars_queued"] = sum(1 for fingerprint in queue if fingerprint not in done)
+        atomic_write(self.state_root / avatars_mod.SEEN_FILE, json.dumps(seen, ensure_ascii=False, separators=(",", ":")))
         atomic_write(path, json.dumps(known, ensure_ascii=False, separators=(",", ":")))
         self.stats["avatars"] = len(known)
         return known
