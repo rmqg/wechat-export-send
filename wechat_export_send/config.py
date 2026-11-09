@@ -34,6 +34,8 @@ DEFAULTS: dict = {
         "container_memory_mb": 1024,
         "members": True,
         "avatars": True,
+        "avatar_download": {"enabled": True, "per_run": 20, "delay_seconds": 0.5, "max_seconds": 60,
+                            "timeout_seconds": 5, "network": "bridge"},
         "media": {"enabled": True, "max_bytes": 104857600, "thumbnails": False, "files": True, "pending_days": 7},
     },
     "send": {

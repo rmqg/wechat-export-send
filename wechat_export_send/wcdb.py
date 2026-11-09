@@ -112,7 +112,10 @@ def load_contacts(path: Path | None) -> dict[str, dict]:
             nickname = str(row.get(nickcol) or "") if nickcol else ""
             remark = str(row.get(remarkcol) or "") if remarkcol else ""
             result[str(username)] = {"username": str(username), "nick_name": nickname, "remark": remark,
-                                     "display_name": remark or nickname}
+                                     "display_name": remark or nickname,
+                                     "head_urls": [str(row[by_lower[name]]) for name in ("big_head_url", "small_head_url")
+                                                   if name in by_lower and row.get(by_lower[name])],
+                                     "head_md5": str(row.get(by_lower["head_img_md5"]) or "") if "head_img_md5" in by_lower else ""}
     return result
 
 

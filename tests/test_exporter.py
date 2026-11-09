@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
+import time
 from pathlib import Path
 
 import pytest
 
-from wechat_export_send import exporter, sqlcipher, synthetic
+from wechat_export_send import avatars, exporter, sqlcipher, synthetic, wcdb
 from wechat_export_send.config import DEFAULTS, IdMapper, _merge
 
 NOW = synthetic.START + 30000
@@ -95,6 +97,97 @@ def test_avatars_survive_when_the_client_cache_goes_away(account):
     (Path(info["storage"]) / "head_image" / "head_image.db").unlink()
     stats = run(root, info, now=NOW + 300)
     assert _group_export(root) == before and not stats["errors"]
+
+
+AVATAR_URL = "https://wx.qlogo.cn/mmhead/synthetic/0"
+
+
+def _with_contact_urls(monkeypatch, urls: dict):
+    original = wcdb.load_contacts
+
+    def patched(path):
+        result = original(path)
+        for username, url in urls.items():
+            if username in result:
+                result[username]["head_urls"] = [url]
+        return result
+
+    monkeypatch.setattr(wcdb, "load_contacts", patched)
+
+
+def test_avatar_missing_locally_is_queued_then_merged(account, monkeypatch):
+    root, info = account
+    _with_contact_urls(monkeypatch, {synthetic.CEN: AVATAR_URL, synthetic.ALICE: AVATAR_URL + "/served-locally"})
+    stats = run(root, info)
+    state = root / "export" / "state"
+    queue = json.loads((state / avatars.QUEUE_FILE).read_text(encoding="utf-8"))
+    assert [item["urls"] for item in queue.values()] == [[AVATAR_URL]] and stats["avatars_queued"] == 1  # 本地有的不排队
+    assert "avatar" not in _group_export(root)[1][IdMapper(b"test-salt", "hash").sender(synthetic.CEN)]
+
+    calls = []
+    picture = synthetic._png(32, 32, 77)
+    result = avatars.download_pending(root / "export", state, fetcher=lambda url, timeout: calls.append(url) or picture)
+    assert result["downloaded"] == 1 and calls == [AVATAR_URL]
+    assert not avatars.has_due(state)  # 下载过的不会重复下载
+
+    stats = run(root, info, now=NOW + 300)
+    member = _group_export(root)[1][IdMapper(b"test-salt", "hash").sender(synthetic.CEN)]
+    assert (root / "export" / member["avatar"]).read_bytes() == picture and stats["avatars_queued"] == 0
+
+
+def test_avatar_url_outside_wechat_is_never_queued(account, monkeypatch):
+    root, info = account
+    _with_contact_urls(monkeypatch, {synthetic.CEN: "https://example.com/a.png"})
+    run(root, info)
+    assert json.loads((root / "export" / "state" / avatars.QUEUE_FILE).read_text(encoding="utf-8")) == {}
+
+
+def _queue(tmp_path: Path, count: int = 1) -> tuple[Path, Path]:
+    export, state = tmp_path / "export", tmp_path / "state"
+    export.mkdir()
+    state.mkdir()
+    queue = {f"fp{index}": {"urls": [f"{AVATAR_URL}/{index}"], "targets": [f"u{index}"]} for index in range(count)}
+    (state / avatars.QUEUE_FILE).write_text(json.dumps(queue), encoding="utf-8")
+    return export, state
+
+
+def test_avatar_download_failure_backs_off_then_retries(tmp_path):
+    export, state = _queue(tmp_path)
+    calls = []
+    assert avatars.download_pending(export, state, now=1000, fetcher=lambda u, t: calls.append(u))["failed"] == 1
+    assert avatars.download_pending(export, state, now=1000 + 3599, fetcher=lambda u, t: calls.append(u))["waiting"] == 1
+    assert len(calls) == 1 and not avatars.has_due(state, now=1000 + 3599)
+    assert avatars.download_pending(export, state, now=1000 + 3601, fetcher=lambda u, t: calls.append(u))["failed"] == 1
+    assert len(calls) == 2  # 第二次失败后退避翻倍
+    assert not avatars.has_due(state, now=1000 + 3601 + 7199) and avatars.has_due(state, now=1000 + 3601 + 7201)
+
+
+def test_avatar_download_rejects_bad_images_and_respects_limits(tmp_path):
+    export, state = _queue(tmp_path, 5)
+    assert avatars.download_pending(export, state, limit=2, sleeper=lambda s: None,
+                                    fetcher=lambda u, t: b"not an image")["failed"] == 2
+    assert not list(export.rglob("*.png"))
+    delays = []
+    ticks = iter([0, 0, 100, 100, 100, 100, 100, 100, 100])
+    result = avatars.download_pending(export, state, now=time.time() + 10**7, max_seconds=60, delay=0.5, sleeper=delays.append,
+                                      clock=lambda: next(ticks), fetcher=lambda u, t: synthetic._png(32, 32, 9))
+    assert result["downloaded"] == 1 and delays == []  # 超时后不再下载
+
+
+@pytest.mark.parametrize("url", ["http://wx.qlogo.cn/a", "https://example.com/a", "https://wx.qlogo.cn.evil.test/a",
+                                 "https://user@wx.qlogo.cn/a", "https://wx.qlogo.cn:8443/a", "", "https://wx.qlogo.cn/" + "a" * 5000])
+def test_avatar_url_allowlist(url):
+    assert not avatars.url_allowed(url) and avatars.fetch(url, 1) is None
+
+
+def test_load_contacts_reads_head_urls(tmp_path):
+    path = tmp_path / "contact.db"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE contact (username TEXT, nick_name TEXT, remark TEXT, big_head_url TEXT, small_head_url TEXT, head_img_md5 TEXT)")
+    connection.execute("INSERT INTO contact VALUES ('a','甲','',?,?,'m')", (AVATAR_URL, AVATAR_URL + "/s"))
+    connection.commit()
+    connection.close()
+    assert wcdb.load_contacts(path)["a"]["head_urls"] == [AVATAR_URL, AVATAR_URL + "/s"]
 
 
 def test_no_raw_account_ids_in_hash_mode(account):

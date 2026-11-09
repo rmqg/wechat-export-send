@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import __version__, media as media_mod, message_parse, sqlcipher, wcdb
+from . import __version__, avatars as avatars_mod, media as media_mod, message_parse, sqlcipher, wcdb
 from .config import IdMapper, Instance, atomic_write, conversation_kind
 
 SCHEMA = "chat-export/v1"
@@ -177,7 +177,7 @@ class Exporter:
             finally:
                 plain.unlink(missing_ok=True)
         self._write_batches(batches, state)
-        avatars = self._store_avatars(state, rooms)
+        avatars = self._store_avatars(state, rooms, names)
         self._write_members(state, rooms, names, avatars)
         self._write_manifest(state, names, now, avatars)
         self._save_state(state)
@@ -488,7 +488,30 @@ class Exporter:
                 out.flush()
                 os.fsync(out.fileno())
 
-    def _store_avatars(self, state: dict, rooms: dict) -> dict[str, str]:
+    def _queue_avatar_downloads(self, names: dict, served: set[str], targets_for, known: dict[str, str]) -> None:
+        """本地没有缓存的头像排进下载队列；已经下载好的合并进来。链接变了（换头像）会重新下载。"""
+        if not (self.settings.get("avatar_download") or {}).get("enabled"):
+            return
+        try:
+            done = json.loads((self.state_root / avatars_mod.DONE_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            done = {}
+        done = done if isinstance(done, dict) else {}
+        queue: dict[str, dict] = {}
+        for username, contact in names.items():
+            urls = [url for url in contact.get("head_urls") or [] if avatars_mod.url_allowed(url)]
+            targets = targets_for(username) if username not in served and urls else []
+            if not targets:
+                continue
+            fingerprint = hashlib.sha256(json.dumps([urls, contact.get("head_md5") or ""]).encode()).hexdigest()[:32]
+            queue[fingerprint] = {"urls": urls, "targets": targets}
+            relative = done.get(fingerprint)
+            if isinstance(relative, str) and (self.root / relative).is_file():
+                known.update(dict.fromkeys(targets, relative))
+        atomic_write(self.state_root / avatars_mod.QUEUE_FILE, json.dumps(queue, ensure_ascii=False, separators=(",", ":")))
+        self.stats["avatars_queued"] = sum(1 for fingerprint in queue if fingerprint not in done)
+
+    def _store_avatars(self, state: dict, rooms: dict, names: dict) -> dict[str, str]:
         """把用得上的头像写进 media/，返回 {成员或会话的导出 ID: 相对路径}。
 
         客户端的头像缓存会被淘汰，读库也可能失败，所以之前导出过的路径记在 state 里继续用。"""
@@ -506,19 +529,25 @@ class Exporter:
         for username, room in rooms.items():
             if self.mapper.conversation(username, conversation_kind(username)) in exported:
                 accounts |= set(room.get("members") or []) | set(room.get("nicknames") or {})
+
+        def targets_for(username: str) -> list[str]:
+            targets = [self.mapper.sender(username)] if username in accounts else []
+            conversation_id = self.mapper.conversation(username, conversation_kind(username))
+            return targets + [conversation_id] if conversation_id in exported else targets
+
+        served: set[str] = set()
         try:
             for username, data in self.source.head_images().items():
-                conversation_id = self.mapper.conversation(username, conversation_kind(username))
-                targets = [self.mapper.sender(username)] if username in accounts else []
-                if conversation_id in exported:
-                    targets.append(conversation_id)
+                targets = targets_for(username)
                 fmt = media_mod.detect_image_format(data)
                 if not targets or len(data) > MAX_AVATAR_BYTES or fmt not in _AVATAR_FORMATS:
                     continue
                 relative, _ = media_mod.store_content(self.root, data, fmt)
                 known.update(dict.fromkeys(targets, relative))
+                served.add(username)
         except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
             self.stats["errors"].append({"shard": "head_image/head_image.db", "error": type(exc).__name__})
+        self._queue_avatar_downloads(names, served, targets_for, known)
         atomic_write(path, json.dumps(known, ensure_ascii=False, separators=(",", ":")))
         self.stats["avatars"] = len(known)
         return known

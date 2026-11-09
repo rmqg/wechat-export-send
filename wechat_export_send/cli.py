@@ -306,11 +306,54 @@ def keys_image(args) -> int:
 
 
 # ---- 导出 ----
+def _avatar_download(instance: Instance, *, limit: int | None = None, max_seconds: float | None = None) -> int:
+    """下载头像。容器模式下用单独的容器，只挂导出目录，拿不到密钥和数据库。输出走 stderr，stdout 留给 export 的 JSON。"""
+    from . import avatars
+
+    settings = instance.config["export"]["avatar_download"]
+    state_root = instance.state / "export"
+    arguments = ["--export-root", str(instance.export_root), "--state-root", str(state_root),
+                 "--limit", str(settings["per_run"] if limit is None else limit),
+                 "--delay", str(settings["delay_seconds"]),
+                 "--max-seconds", str(settings["max_seconds"] if max_seconds is None else max_seconds),
+                 "--timeout", str(settings["timeout_seconds"])]
+    if instance.config["export"]["runner"] != "container":
+        return avatars.main(arguments)
+    uid, gid = instance.owner()
+    return subprocess.call(
+        ["docker", "run", "--rm", "--pull", "never", "--network", settings["network"], "--read-only",
+         "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "0.5",
+         "--user", f"{uid}:{gid}", "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m", "--env", "PYTHONPATH=/app", "--env", "TZ=UTC",
+         "--mount", f"type=bind,src={instance.export_root},dst={instance.export_root}",
+         "--mount", f"type=bind,src={state_root},dst={state_root}",
+         instance.config["send"]["tools_image"], "-m", "wechat_export_send.avatars", *arguments],
+        stdout=sys.stderr)
+
+
+def _download_avatars_quietly(instance: Instance) -> None:
+    """导出之后顺手下载头像。失败不影响导出的结果。"""
+    from . import avatars
+
+    export = instance.config["export"]
+    if not export.get("avatars") or not export["avatar_download"]["enabled"]:
+        return
+    try:
+        if avatars.has_due(instance.state / "export"):
+            _avatar_download(instance)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"头像下载没有完成：{type(exc).__name__}", file=sys.stderr)
+
+
+def fetch_avatars(args) -> int:
+    return _avatar_download(Instance.load(args.instance), limit=args.limit, max_seconds=args.max_seconds)
+
+
 def export(args) -> int:
     instance = Instance.load(args.instance)
     if not args.in_process and (args.container or instance.config["export"]["runner"] == "container"):
         while True:
             code = run_in_tools(instance, ["export", "--instance", instance.name, "--in-process"])
+            _download_avatars_quietly(instance)
             if not args.watch:
                 return code
             time.sleep(int(instance.config["export"]["interval_seconds"]))
@@ -322,6 +365,8 @@ def export(args) -> int:
             print(str(exc), file=sys.stderr)
             return 3
         _print_json({"time": int(time.time()), **stats})
+        if not args.in_process:
+            _download_avatars_quietly(instance)
         if not args.watch:
             return 1 if stats["errors"] and not stats["new_lines"] and not stats["conversations"] else 0
         time.sleep(int(instance.config["export"]["interval_seconds"]))
@@ -483,6 +528,12 @@ def build_parser() -> argparse.ArgumentParser:
     item = sub.add_parser("conversations", help="列出已导出的会话：id、类型、条数、名字")
     item.add_argument("--instance", required=True)
     item.set_defaults(func=conversations)
+
+    item = sub.add_parser("fetch-avatars", help="下载本地没有缓存的头像（导出之后也会自动少量下载）")
+    item.add_argument("--instance", default="main")
+    item.add_argument("--limit", type=int, help="这次最多下载几个")
+    item.add_argument("--max-seconds", type=float, help="这次最多运行多少秒")
+    item.set_defaults(func=fetch_avatars)
 
     item = sub.add_parser("fetch-originals", help="可选：从腾讯 CDN 下载 pending 的原图（默认关闭）")
     item.add_argument("--instance", required=True)

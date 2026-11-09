@@ -48,7 +48,13 @@
 | `export.runner` | `"host"` 或 `"container"` | `"host"` | 导出和核对跑在宿主还是工具容器（无网络，只读挂载） | 宿主没有 Python 依赖，或者想限制内存 |
 | `export.container_memory_mb` | 整数 | `1024` | 工具容器里导出的内存上限 | 库特别大时调大 |
 | `export.members` | 布尔 | `true` | 写不写 `members/*.json`（群成员的哈希 ID、昵称） | 不需要成员表 |
-| `export.avatars` | 布尔 | `true` | 导不导头像：从客户端本地的 `head_image.db` 取，写进 `media/`，填成员的 `avatar` 和会话的 `avatar`。只有客户端缓存过的人才有 | 不想在导出里留头像 |
+| `export.avatars` | 布尔 | `true` | 导不导头像：先用客户端本地的 `head_image.db`，没有的再按下面的设置下载，写进 `media/`，填成员的 `avatar` 和会话的 `avatar` | 不想在导出里留头像 |
+| `export.avatar_download.enabled` | 布尔 | `true` | 本地没有的头像要不要按联系人库里的链接下载。只访问微信头像域名 | 服务器不允许访问外网，或不想发这些请求 |
+| `export.avatar_download.per_run` | 整数 | `20` | 每次导出之后最多下载几个 | 想更快补齐用 `fetch-avatars --limit` |
+| `export.avatar_download.delay_seconds` | 数字 | `0.5` | 两次下载之间的间隔（秒） | 一般不用改 |
+| `export.avatar_download.max_seconds` | 数字 | `60` | 每次下载最多运行多久（秒） | 导出间隔很短时调小 |
+| `export.avatar_download.timeout_seconds` | 数字 | `5` | 单个请求的超时（秒） | 网络很慢 |
+| `export.avatar_download.network` | 字符串 | `bridge` | 容器模式下，下载容器用的 Docker 网络 | 默认网络出不去时换成能上网的网络 |
 | `export.media.enabled` | 布尔 | `true` | 处理不处理媒体。`false` 时不解图，图片消息的 `status` 只会是 `pending` 或 `missing` | 只要文字 |
 | `export.media.max_bytes` | 整数 | `104857600` | 超过这个大小的文件不复制（报 `missing`）。只管文件，不管图片 | 磁盘紧或要收大文件 |
 | `export.media.thumbnails` | 布尔 | `false` | 没有原图时额外收一份缩略图，单独成项并标 `is_thumbnail: true`，不会顶替原图 | 消费方能接受缩略图 |

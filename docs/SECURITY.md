@@ -19,6 +19,7 @@
 | `export` | `gui/` 下的数据库和缓存（只读复制）、`keys/` | `export/`（700）、`state/` | 你运行它的用户 | 无 |
 | `wechat-send` | 要发的内容、`gui/`（只读）、`keys/` | `state/send/`；操作微信窗口 | 工具容器：无 capability，只读根文件系统，普通用户 | 共享桌面的网络命名空间（为了连 X11），自己不发请求 |
 | `watchdog` | X11 窗口列表（标题和尺寸） | `state/watchdog/` | 工具容器，无 capability | 配了 `bark_url` 时向它发提醒 |
+| 头像下载（`export.avatar_download`，默认开） | 导出排好的头像链接 | `export/media/` | 你运行它的用户 | **访问微信头像域名**（`wx.qlogo.cn` 等四个，不跟随跳转）。容器模式下单独起容器，只挂导出目录，拿不到密钥和数据库 |
 | `fetch-originals`（默认关） | 消息里的图片描述、客户端缓存的 CDN 凭据 | `export/media/` | 你运行它的用户 | **访问腾讯 CDN** |
 | `serve-media`（默认关） | `export/media/` | 无 | 你运行它的用户 | 只监听 127.0.0.1，要 token |
 

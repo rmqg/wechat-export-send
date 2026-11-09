@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- 头像自动下载：`head_image.db` 里没有的成员，按联系人库的头像链接下载（`export.avatar_download`，默认开）。只访问微信头像域名，限速，失败按小时翻倍退避，最长 7 天；容器模式下单独起容器，只挂导出目录，不影响导出结果。新增 `fetch-avatars`。
 - 导出头像：`export.avatars`（默认开）从客户端本地的 `head_image.db` 取头像，写进 `media/`，填 `members/*.json` 的 `avatar` 和 manifest 里会话的可选字段 `avatar`（群头像）。不联网；客户端缓存被淘汰或读库失败时沿用上次导出的路径。之前 `avatar` 一直没有写，下游报告因此没有头像。
 
 ## v1.0.0

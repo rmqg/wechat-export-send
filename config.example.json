@@ -25,6 +25,7 @@
     "container_memory_mb": 1024,
     "members": true,
     "avatars": true,
+    "avatar_download": {"enabled": true, "per_run": 20, "delay_seconds": 0.5, "max_seconds": 60, "timeout_seconds": 5, "network": "bridge"},
     "media": {
       "enabled": true,
       "max_bytes": 104857600,
