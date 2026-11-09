@@ -8,6 +8,9 @@
 
 ## 安装和 demo
 
+**`apt-get` 报 `Could not get lock /var/lib/dpkg/lock-frontend` / `held by process … (apt-get)` 或 `(unattended-upgr)`**
+系统在后台自动更新（全新服务器刚开机时常见），或者上一次 apt 被打断后还在跑。不要删锁、不要杀进程，等它结束（`ps aux | grep -E "apt|dpkg|unattended" | grep -v grep` 没有输出）再运行同一条命令。之后如果提示 `dpkg was interrupted`，运行 `dpkg --configure -a` 再重试。
+
 **`install.sh` 说没有 venv 也没有 pip**
 Debian/Ubuntu：`apt-get install -y python3-venv`，再运行一次。
 

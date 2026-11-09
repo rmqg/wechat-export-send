@@ -61,6 +61,7 @@
 - `doctor` 的每个失败和警告都带可以直接复制的修复命令（按 Ubuntu / 其他发行版给出 Docker 和 Compose 的装法），并检查实例目录的属主。
 - 命令出意外时打印中文说明和下一步，不再只给英文异常栈（`WES_DEBUG=1` 看完整信息）。
 - `docs/TROUBLESHOOTING.md` 收录真实部署时踩过的坑：`LANG=zh_CN` 时窗口标题变化、Debian 12 的 Python 3.11.2 让 `client install` 崩溃、keys 目录的属主和权限、Esc 收起主窗口、小内存设备。
+- 新手照文档验收（弱模型扮演新手，三轮）：A 段离线演示能走通；B 段只到「装 Docker / 向导前置检查」，构建镜像以后的步骤没有经过新手验收，详见 `docs/VALIDATION.md` 第七节。顺带补上 apt 锁被占用、apt 被打断、答案文件在服务器上建等说明。
 
 ### 已知的限制
 

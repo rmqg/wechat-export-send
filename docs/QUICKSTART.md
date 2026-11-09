@@ -35,6 +35,8 @@ python3 --version
 
 **应该看到**：`Python 3.10` 或更高，例如 `Python 3.12.3`。
 
+> 报 `Could not get lock /var/lib/dpkg/lock-frontend`（后面写着 `held by process 1234 (apt-get)` 或 `(unattended-upgr)`）：系统正在后台自动更新，全新的服务器刚开机时很常见。**不要删锁文件、不要杀进程**，等几分钟再运行同一条命令。想看它什么时候结束：`ps aux | grep -E "apt|dpkg|unattended" | grep -v grep`，没有输出了就可以。
+
 ### 第 3 步：把 release 包放到服务器上并校验
 
 需要两个文件：`wechat-export-send-1.0.0.tar.gz` 和 `SHA256SUMS`。
@@ -152,9 +154,13 @@ cd /root/wechat-export-send-1.0.0
 
 第 5 步回车留空也可以（还没下载 deb 时）：向导会跳过安装客户端和启动桌面，照样自检，并在「下一步做什么」里列出之后要补的命令。
 
+向导一开始会检查 Docker 和 Python 依赖，不满足时直接列出要处理的事情并退出，这时不会打印「下一步做什么」：处理完再运行一次就行。
+
 最后它会跑一次自检，并打印「下一步做什么」，里面写着你的 noVNC 端口（第一个实例一般是 `17900`）。这时 doctor 里「账号目录」「数据库密钥」的警告是正常的：还没登录。
 
 > **没有终端、或者用脚本安装时**：用答案文件代替上面的问答：
+>
+> 下面几条都在**服务器上**、`/root/wechat-export-send-1.0.0` 目录里运行：
 >
 > ```sh
 > cp install.env.example /root/install.env
