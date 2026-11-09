@@ -256,7 +256,8 @@ def wizard(answers: dict, interactive: bool) -> int:
     if not docker_ok:
         problems.append(f"Docker 还不能用：{docker_fix}")
     if not _deps_ready():
-        problems.append(f"Python 依赖没装好：{_sudo()}apt-get install -y python3-venv，然后重新运行 ./install.sh")
+        problems.append(f"Python 依赖没装好（之前运行 ./install.sh 时没能建出 .venv，多半是那时还没装 python3-venv）："
+                        f"{_sudo()}apt-get install -y python3-venv && ./install.sh --non-interactive，看到「依赖已装进 .venv」再继续")
     if problems:
         print("\n接真实账号之前，先处理这些：")
         for line in problems:

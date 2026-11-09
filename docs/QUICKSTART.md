@@ -74,6 +74,8 @@ cd wechat-export-send-1.0.0
 
 输入 `1` 回车。（还没装 Docker 时默认就是 1。）
 
+**确认依赖装好了**：输出里要有一行 `依赖已装进 .venv`。如果看到的是「警告：既没有 venv 也没有 pip」，说明第 2 步的 `python3-venv` 没装上（比如被打断了）：重新运行第 2 步那条命令，再运行一次 `./install.sh`。
+
 > **没有终端、或者用脚本安装时**（例如通过自动化工具执行命令，看不到提问）：`./install.sh` 会打印「不提问……只装了依赖」，这对 A 段已经够了，直接做第 5 步。
 
 ### 第 5 步：跑演示和自检
@@ -93,10 +95,12 @@ A 段到此结束。只想了解一下的话可以停在这里。
 
 ### 第 6 步：装 Docker
 
+要下载一百多 MB，通常一两分钟。中途断了或者报错，直接把同一条命令再运行一次。
+
 **Ubuntu**：
 
 ```sh
-apt-get install -y docker.io docker-compose-v2
+apt-get update && apt-get install -y docker.io docker-compose-v2
 systemctl enable --now docker
 ```
 
@@ -135,7 +139,7 @@ cd /root/wechat-export-send-1.0.0
 ./bin/wechat-export-send setup
 ```
 
-它会依次问（括号里是推荐的回答）：
+如果它说「接真实账号之前，先处理这些」，照每一条后面的命令处理完，再运行一次 `./bin/wechat-export-send setup`。否则它会依次问（括号里是推荐的回答）：
 
 | 问题 | 回答 |
 |---|---|
@@ -145,6 +149,8 @@ cd /root/wechat-export-send-1.0.0
 | 第 4 步：现在构建镜像吗？ | 直接回车（是）。要下载约 1 GB，通常 5～15 分钟，屏幕会滚动很多下载日志，正常 |
 | 第 5 步：deb 文件的路径 | `/root/WeChatLinux_x86_64.deb` |
 | 第 6 步：现在启动桌面容器吗？ | 直接回车（是） |
+
+第 5 步回车留空也可以（还没下载 deb 时）：向导会跳过安装客户端和启动桌面，照样自检，并在「下一步做什么」里列出之后要补的命令。
 
 最后它会跑一次自检，并打印「下一步做什么」，里面写着你的 noVNC 端口（第一个实例一般是 `17900`）。这时 doctor 里「账号目录」「数据库密钥」的警告是正常的：还没登录。
 
