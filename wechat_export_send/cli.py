@@ -7,6 +7,7 @@ import io
 import json
 import lzma
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -411,6 +412,12 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--json", action="store_true")
     item.set_defaults(func=doctor)
 
+    item = sub.add_parser("setup", help="安装向导：检查环境，一步步建实例、构建镜像、装客户端、启动桌面")
+    item.add_argument("--answers", help="答案文件（见 install.env.example），给了就不提问")
+    item.add_argument("--non-interactive", action="store_true")
+    item.add_argument("--check-only", action="store_true", help="只检查环境")
+    item.set_defaults(func=_setup)
+
     item = sub.add_parser("instance", help="管理实例（一个实例一个账号、一个容器）")
     actions = item.add_subparsers(dest="action", required=True)
     action = actions.add_parser("create")
@@ -495,6 +502,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _setup(args) -> int:
+    from .setup_wizard import main as setup_main
+    return setup_main((["--answers", args.answers] if args.answers else []) + (["--non-interactive"] if args.non_interactive else [])
+                      + (["--check-only"] if args.check_only else []))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -504,6 +517,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except KeyboardInterrupt:
         return 130
+    except PermissionError as exc:
+        print(f"错误：没有权限（{exc.filename or exc}）。实例目录属于谁就用谁运行；用 root 建的实例要用 root（sudo）运行。"
+              "\n  先运行 ./bin/wechat-export-send doctor 看具体是哪一项。", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"错误：找不到 {exc.filename or exc}。确认路径，或先运行 ./bin/wechat-export-send doctor。", file=sys.stderr)
+        return 1
+    except Exception as exc:  # 最后一道：不让新手只看到英文异常栈
+        if os.environ.get("WES_DEBUG"):
+            raise
+        text = str(exc) if re.search(r"[\u4e00-\u9fff]", str(exc)) else f"{type(exc).__name__}: {exc}"
+        print(f"错误：{text}\n  先运行 ./bin/wechat-export-send doctor，它会列出每个问题和修复命令；"
+              "\n  还不行就加 WES_DEBUG=1 重跑这条命令看完整信息，再按 docs/TROUBLESHOOTING.md 排查。", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

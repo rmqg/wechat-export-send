@@ -235,8 +235,10 @@ def test_export_without_keys_explains(tmp_path, monkeypatch, capsys):
     (directory / "keys").mkdir()
     (directory / "keys" / "all_keys.json").write_text('{"contact/contact.db":{"enc_key":"00"}}', encoding="utf-8")
     (directory / "config.json").write_text('{"instance":"main"}', encoding="utf-8")
-    with pytest.raises(RuntimeError, match="keys capture"):
-        cli.main(["export", "--instance", "main"])
+    monkeypatch.delenv("WES_DEBUG", raising=False)
+    assert cli.main(["export", "--instance", "main"]) == 1
+    err = capsys.readouterr().err
+    assert "keys capture" in err and "doctor" in err and "Traceback" not in err
 
 
 def _attached(tmp_path, monkeypatch, capsys, **options):

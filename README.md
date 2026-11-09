@@ -1,5 +1,10 @@
 # wechat-export-send
 
+> **难度和用时**
+> - **离线演示**：约 5 分钟，不要账号、不要 Docker、不联网，任何 Linux 都行。
+> - **真实部署（拿到第一份导出）**：约 30～60 分钟。需要会用 Linux 命令行和 Docker、一台 x86_64 服务器、能扫码的手机。跟着 [docs/QUICKSTART.md](docs/QUICKSTART.md) 一步一步做，每一步都写了应该看到什么。
+> - **自动发消息**：在真实部署之上，还要会看截图确认界面校准，第一次往群里发之前一定先 `--dry-run`。
+
 在 Linux 服务器上用容器挂一个 Linux 版微信，把**你自己账号**本地的聊天记录只读解密、增量导出成开放的 JSONL 格式（`chat-export/v1`），并提供一个严格区分结果的命令 `wechat-send`，往会话里发文字和图片（`chat-send/v1`）。
 
 从 [rmqg/wechat-digest](https://github.com/rmqg/wechat-digest) v1.2.4 拆分出来，全新历史。那边负责写总结，这边只负责「把消息拿出来」和「把消息发出去」。
@@ -35,19 +40,25 @@
 
 ## 快速开始
 
+第一次用，建议直接看 **[docs/QUICKSTART.md](docs/QUICKSTART.md)**：从全新服务器开始，到 demo，再到第一份真实导出，带截图示意。
+
 ### 先试 demo：不用账号，不联网
 
 ```sh
 tar -xzf wechat-export-send-1.0.0.tar.gz
 cd wechat-export-send-1.0.0
-./install.sh            # 装依赖；这一步要联网。跳过它 demo 也能跑，只是慢
+./install.sh            # 检查环境、装依赖（要联网），然后问你想做什么：选 1「只跑离线演示」
 ./bin/wechat-export-send demo
 ./bin/wechat-export-send doctor
 ```
 
+没有终端（脚本、自动化工具）时 `./install.sh` 不提问、只装依赖；要自动走完向导用答案文件：`./install.sh --config install.env`，格式见 [install.env.example](install.env.example)。
+
 demo 把仓库带的虚构加密账号导出到 `demo-output/export/`，并检查引用、转发、图片、增量、错误密钥被拒绝等共 12 项。
 
 ### 接真实账号
+
+最省事的是向导：装好 Docker、下载好官方 deb 以后运行 `./bin/wechat-export-send setup`，选 2，它会建实例、构建镜像、装客户端、启动桌面，最后告诉你怎么扫码。手动做的话是这些命令：
 
 ```sh
 ./install.sh --images                                   # 构建桌面和工具镜像
@@ -85,6 +96,7 @@ demo 把仓库带的虚构加密账号导出到 `demo-output/export/`，并检�
 
 ## 文档
 
+- [docs/QUICKSTART.md](docs/QUICKSTART.md)：新手从零开始，到第一份真实导出，每一步写了应该看到什么
 - [docs/INSTALL.md](docs/INSTALL.md)：一步一步安装，多账号，开机自启
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md)：每个参数
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)：按症状查

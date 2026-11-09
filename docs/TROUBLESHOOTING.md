@@ -20,6 +20,32 @@ Debian/Ubuntu：`apt-get install -y python3-venv`，再运行一次。
 **`docker compose` 报 `unknown shorthand flag` 或 `compose is not a docker command`**
 没装 Compose 插件。Debian/Ubuntu：`apt-get install -y docker-compose-plugin`（来自 Docker 官方源）。
 
+**`./install.sh` 没有提问，只打印「不提问……只装了依赖」**
+你是在脚本或自动化工具里运行的（没有终端）。用答案文件：`cp install.env.example install.env`，改好后 `./install.sh --config install.env`；或者装完再运行 `./bin/wechat-export-send setup --answers install.env`。
+
+**向导说「接真实账号之前，先处理这些」**
+它列出的每一条后面都有要运行的命令（装 Docker、装 python3-venv、换 x86_64 机器）。处理完重新运行 `./bin/wechat-export-send setup`，做完的步骤会跳过。
+
+**命令报「错误：……」，后面让你先运行 doctor**
+程序遇到了没预料到的情况。照提示先跑 `./bin/wechat-export-send doctor`；要看完整的出错位置（提 issue 时附上，注意先删掉路径里的私人信息）：在命令前加 `WES_DEBUG=1`。
+
+## 真实部署时踩过的坑（在 iStoreOS 上用这个 release 接真实账号时遇到的）
+
+**窗口标题变成了「微信」，看门狗一直报 offline、发送找不到窗口**
+桌面镜像的语言环境被改成了 `zh_CN`：客户端的窗口标题会从 `Weixin` 变成「微信」，而界面校准和窗口识别都是按 `Weixin` 做的。不要改 `docker/desktop/Dockerfile` 里的 `LANG=C.UTF-8`；改过的话改回来，`./install.sh --images` 重新构建，再 `instance down`、`instance up`。对接别人的容器（`instance attach`）而它用的是中文环境时，把实例的 `ui-calibration.json` 里 `window_title_substring` 改成 `微信`。
+
+**Debian 12 上 `client install` 崩溃，报 `TypeError` 和 `filter`**
+Debian 12 自带的 Python 3.11.2 的 `tarfile` 还没有 `filter` 参数。1.0.0 已经改成自己检查路径和链接，不再用这个参数；还遇到的话说明你在用更早的代码，换成 1.0.0 的 release 包。
+
+**`doctor` 报 keys 目录「属于 uid …，当前用户读写不了」，或者 `export` 报没有权限**
+用 root 建的实例（或 `instance attach`），实例目录会交给容器里的用户（默认是客户端数据目录的属主），这样容器才写得进去。之后要一直用 root 运行（命令前加 `sudo`）。不要把 `keys/` 改成别人能读的权限：doctor 要求 `keys/` 是 700、密钥文件是 600，`chmod 700 instances/<实例>/keys && chmod 600 instances/<实例>/keys/*.json` 可以改回来。
+
+**往微信窗口按了 Esc 以后主窗口不见了**
+客户端收到 Esc 会把主窗口收起来，这时 noVNC 里只剩桌面。不要按 Esc；要找回来，在容器里再启动一次客户端（它是单实例，会把已有的窗口叫出来）：`docker exec wes-main-desktop timeout 25 /opt/wechat/wechat --no-sandbox`。
+
+**内存很小的设备（4～8 GB）上导出时卡死**
+桌面容器上限 2 GB，导出还要解密数据库。导出前先看 `grep MemAvailable /proc/meminfo`，低于约 1.2 GB 就先别跑；定时导出用 `flock -n /tmp/wes-export-main.lock ./bin/wechat-export-send export --instance main` 防止两次导出叠在一起。BusyBox 的 `free -m` 会忽略 `-m`，输出单位其实是 KB，别看错。
+
 ## 桌面容器
 
 **`instance up` 报「先运行 wechat-export-send client install」**

@@ -34,7 +34,17 @@ cd wechat-export-send-1.0.0
 ./install.sh
 ```
 
-它只碰当前目录：优先建 `.venv`，没有 venv 模块时退回 `pip --target .deps`，都没有时给出提示。不改系统，不需要 root。
+第一次接触的话，建议改看 [QUICKSTART.md](QUICKSTART.md)。
+
+它只碰当前目录：先检查环境（发行版、内核、CPU、Python 和 venv、Docker 和 Compose、内存、磁盘），缺什么就打印要运行的命令；再装依赖：优先建 `.venv`，没有 venv 模块时退回 `pip --target .deps`，都没有时给出提示。不改系统，不需要 root。
+
+在终端里运行时，最后进**安装向导**（`./bin/wechat-export-send setup`，以后也可以单独运行）：问你只跑演示还是接真实账号；接真实账号就依次问实例名、只导出哪些会话、要不要现在构建镜像、deb 在哪、要不要启动桌面，替你执行第 5～7 步，最后自检并打印「下一步」。已经做完的步骤会跳过，可以反复运行。
+
+| 选项 | 作用 |
+|---|---|
+| `--config FILE` | 用答案文件回答向导，不提问。格式见 [install.env.example](../install.env.example) |
+| `--non-interactive` | 不提问，只装依赖（没有终端时也是这样） |
+| `--no-deps`、`--images`、`--tools`、`--link DIR` | 只做对应的那件事，不进向导（和旧版一样） |
 
 想把命令放进 PATH：
 
