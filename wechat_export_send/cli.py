@@ -9,6 +9,7 @@ import json
 import lzma
 import os
 import re
+import inspect
 from pathlib import Path
 import shutil
 import socket
@@ -232,7 +233,10 @@ def _safe_extract(archive: tarfile.TarFile, target: Path) -> None:
                 raise ConfigError("deb 里有指向目录外面的链接，拒绝解开")
             if member.islnk() and not inside((root / member.linkname).resolve()):
                 raise ConfigError("deb 里有指向目录外面的链接，拒绝解开")
-        archive.extractall(target)
+        if "filter" in inspect.signature(archive.extractall).parameters:
+            archive.extractall(target, filter="fully_trusted")
+        else:
+            archive.extractall(target)
     except tarfile.TarError as exc:
         raise ConfigError(f"deb 内容不安全或已损坏（{type(exc).__name__}），拒绝解开") from None
 
