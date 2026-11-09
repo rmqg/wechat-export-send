@@ -48,6 +48,7 @@
 | `export.runner` | `"host"` 或 `"container"` | `"host"` | 导出和核对跑在宿主还是工具容器（无网络，只读挂载） | 宿主没有 Python 依赖，或者想限制内存 |
 | `export.container_memory_mb` | 整数 | `1024` | 工具容器里导出的内存上限 | 库特别大时调大 |
 | `export.members` | 布尔 | `true` | 写不写 `members/*.json`（群成员的哈希 ID、昵称） | 不需要成员表 |
+| `export.avatars` | 布尔 | `true` | 导不导头像：从客户端本地的 `head_image.db` 取，写进 `media/`，填成员的 `avatar` 和会话的 `avatar`。只有客户端缓存过的人才有 | 不想在导出里留头像 |
 | `export.media.enabled` | 布尔 | `true` | 处理不处理媒体。`false` 时不解图，图片消息的 `status` 只会是 `pending` 或 `missing` | 只要文字 |
 | `export.media.max_bytes` | 整数 | `104857600` | 超过这个大小的文件不复制（报 `missing`）。只管文件，不管图片 | 磁盘紧或要收大文件 |
 | `export.media.thumbnails` | 布尔 | `false` | 没有原图时额外收一份缩略图，单独成项并标 `is_thumbnail: true`，不会顶替原图 | 消费方能接受缩略图 |

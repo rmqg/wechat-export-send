@@ -33,6 +33,7 @@ DEFAULTS: dict = {
         "runner": "host",
         "container_memory_mb": 1024,
         "members": True,
+        "avatars": True,
         "media": {"enabled": True, "max_bytes": 104857600, "thumbnails": False, "files": True, "pending_days": 7},
     },
     "send": {

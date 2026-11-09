@@ -59,6 +59,44 @@ def test_contract_shape(account):
     assert (root / "export" / "members" / (manifest["conversations"][0]["id"] + ".json")).is_file()
 
 
+def _group_export(root: Path) -> tuple[dict, dict]:
+    manifest = json.loads((root / "export" / "manifest.json").read_text(encoding="utf-8"))
+    group = next(item for item in manifest["conversations"] if item["kind"] == "group")
+    members = json.loads((root / "export" / group["members_file"]).read_text(encoding="utf-8"))["members"]
+    return group, {member["id"]: member for member in members}
+
+
+def test_avatars_exported_for_members_and_group(account):
+    root, info = account
+    stats = run(root, info)
+    group, members = _group_export(root)
+    mapper = IdMapper(b"test-salt", "hash")
+    expected = {synthetic.ALICE: 40, synthetic.BOB: 120}
+    for person, tint in expected.items():
+        relative = members[mapper.sender(person)]["avatar"]
+        assert re.fullmatch(r"media/[0-9a-f]{2}/[0-9a-f]{64}\.png", relative)
+        assert (root / "export" / relative).read_bytes() == synthetic._png(32, 32, tint)
+    assert "avatar" not in members[mapper.sender(synthetic.CEN)]  # 本地没有缓存，不猜
+    assert (root / "export" / group["avatar"]).read_bytes() == synthetic._png(32, 32, 200)
+    assert stats["avatars"] == 4 and not stats["errors"]  # 两个成员 + 群 + 其中一人的单聊
+
+
+def test_avatars_can_be_turned_off(account):
+    root, info = account
+    run(root, info, settings={"avatars": False})
+    group, members = _group_export(root)
+    assert "avatar" not in group and all("avatar" not in member for member in members.values())
+
+
+def test_avatars_survive_when_the_client_cache_goes_away(account):
+    root, info = account
+    run(root, info)
+    before = _group_export(root)
+    (Path(info["storage"]) / "head_image" / "head_image.db").unlink()
+    stats = run(root, info, now=NOW + 300)
+    assert _group_export(root) == before and not stats["errors"]
+
+
 def test_no_raw_account_ids_in_hash_mode(account):
     root, info = account
     run(root, info)

@@ -1,5 +1,9 @@
 # 更新日志
 
+## 未发布
+
+- 导出头像：`export.avatars`（默认开）从客户端本地的 `head_image.db` 取头像，写进 `media/`，填 `members/*.json` 的 `avatar` 和 manifest 里会话的可选字段 `avatar`（群头像）。不联网；客户端缓存被淘汰或读库失败时沿用上次导出的路径。之前 `avatar` 一直没有写，下游报告因此没有头像。
+
 ## v1.0.0
 
 第一版。从 [rmqg/wechat-digest](https://github.com/rmqg/wechat-digest) v1.2.4 拆分出提取和发送，全新历史。

@@ -163,6 +163,17 @@ def build_account(output: Path) -> dict:
     reserved_sqlite(plain, statements)
     _encrypt(plain, contact_dir / "contact.db", "contact/contact.db", keys)
 
+    # 头像：故意少一个 CEN，覆盖“本地没有缓存头像”的情况
+    head_dir = storage / "head_image"
+    head_dir.mkdir(exist_ok=True, mode=0o700)
+    plain = head_dir / "plain.db"
+    statements = ["CREATE TABLE head_image (username TEXT PRIMARY KEY, md5 TEXT, image_buffer BLOB, update_time INTEGER)"]
+    for tint, person in ((40, ALICE), (120, BOB), (200, GROUP)):
+        statements.append(f"INSERT INTO head_image VALUES ({_sql(person)},'',x'{_png(32, 32, tint).hex()}',0)")
+    statements.append(f"INSERT INTO head_image VALUES ('synthetic_empty_avatar','',x'',0)")
+    reserved_sqlite(plain, statements)
+    _encrypt(plain, head_dir / "head_image.db", "head_image/head_image.db", keys)
+
     # 会话
     session_dir = storage / "session"
     session_dir.mkdir(exist_ok=True, mode=0o700)

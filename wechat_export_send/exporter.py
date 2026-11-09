@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -23,6 +24,8 @@ from .config import IdMapper, Instance, atomic_write, conversation_kind
 SCHEMA = "chat-export/v1"
 FLUSH_LINES = 5000  # 攒这么多行就落盘，库再大也不会把消息全留在内存里
 _DEFERRED = "deferred"
+MAX_AVATAR_BYTES = 4 * 1024 * 1024
+_AVATAR_FORMATS = {"jpg", "png", "gif", "webp"}
 
 
 class ExportBusy(RuntimeError):
@@ -88,6 +91,16 @@ class Source:
             rooms.update(wcdb.load_rooms(plain))
             plain.unlink(missing_ok=True)
         return contacts, sessions, rooms
+
+    def head_images(self) -> dict[str, bytes]:
+        """客户端本地缓存的头像：账号 -> 图片字节。库不存在或没有密钥时返回空。"""
+        plain = self.decrypt("head_image/head_image.db")
+        if plain is None:
+            return {}
+        try:
+            return wcdb.load_head_images(plain)
+        finally:
+            plain.unlink(missing_ok=True)
 
 
 class Exporter:
@@ -164,8 +177,9 @@ class Exporter:
             finally:
                 plain.unlink(missing_ok=True)
         self._write_batches(batches, state)
-        self._write_members(state, rooms, names)
-        self._write_manifest(state, names, now)
+        avatars = self._store_avatars(state, rooms)
+        self._write_members(state, rooms, names, avatars)
+        self._write_manifest(state, names, now, avatars)
         self._save_state(state)
         return self.stats
 
@@ -474,7 +488,42 @@ class Exporter:
                 out.flush()
                 os.fsync(out.fileno())
 
-    def _write_members(self, state: dict, rooms: dict, names: dict) -> None:
+    def _store_avatars(self, state: dict, rooms: dict) -> dict[str, str]:
+        """把用得上的头像写进 media/，返回 {成员或会话的导出 ID: 相对路径}。
+
+        客户端的头像缓存会被淘汰，读库也可能失败，所以之前导出过的路径记在 state 里继续用。"""
+        if not self.settings.get("avatars"):
+            return {}
+        path = self.state_root / "avatars.json"
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        known = {key: value for key, value in saved.items()
+                 if isinstance(value, str) and (self.root / value).is_file()} if isinstance(saved, dict) else {}
+        exported = state["conversations"]
+        accounts: set[str] = set()
+        for username, room in rooms.items():
+            if self.mapper.conversation(username, conversation_kind(username)) in exported:
+                accounts |= set(room.get("members") or []) | set(room.get("nicknames") or {})
+        try:
+            for username, data in self.source.head_images().items():
+                conversation_id = self.mapper.conversation(username, conversation_kind(username))
+                targets = [self.mapper.sender(username)] if username in accounts else []
+                if conversation_id in exported:
+                    targets.append(conversation_id)
+                fmt = media_mod.detect_image_format(data)
+                if not targets or len(data) > MAX_AVATAR_BYTES or fmt not in _AVATAR_FORMATS:
+                    continue
+                relative, _ = media_mod.store_content(self.root, data, fmt)
+                known.update(dict.fromkeys(targets, relative))
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            self.stats["errors"].append({"shard": "head_image/head_image.db", "error": type(exc).__name__})
+        atomic_write(path, json.dumps(known, ensure_ascii=False, separators=(",", ":")))
+        self.stats["avatars"] = len(known)
+        return known
+
+    def _write_members(self, state: dict, rooms: dict, names: dict, avatars: dict[str, str]) -> None:
         if not self.settings.get("members"):
             return
         for username, room in rooms.items():
@@ -493,6 +542,8 @@ class Exporter:
                 if contact.get("display_name"):
                     entry["display_name"] = contact["display_name"]
                     entry.setdefault("name", contact["display_name"])
+                if avatars.get(entry["id"]):
+                    entry["avatar"] = avatars[entry["id"]]
                 members.append(entry)
             if not members:
                 continue
@@ -500,7 +551,7 @@ class Exporter:
                        "updated_at": int(self.now if self.now is not None else time.time()), "members": members}
             atomic_write(self.root / "members" / f"{conversation_id}.json", json.dumps(payload, ensure_ascii=False, indent=1) + "\n")
 
-    def _write_manifest(self, state: dict, names: dict, now: int) -> None:
+    def _write_manifest(self, state: dict, names: dict, now: int, avatars: dict[str, str]) -> None:
         zone = self.settings.get("timezone") or "UTC"
         conversations = []
         for conversation_id, item in sorted(state["conversations"].items()):
@@ -510,6 +561,8 @@ class Exporter:
             members_file = item.get("members_file")
             if members_file and (self.root / members_file).is_file():
                 entry["members_file"] = members_file
+            if avatars.get(conversation_id):
+                entry["avatar"] = avatars[conversation_id]
             conversations.append(entry)
         self.stats["conversations"] = len(conversations)
         manifest = {"schema": SCHEMA, "producer": {"name": "wechat-export-send", "version": __version__},

@@ -24,6 +24,7 @@
     "runner": "host",
     "container_memory_mb": 1024,
     "members": true,
+    "avatars": true,
     "media": {
       "enabled": true,
       "max_bytes": 104857600,
