@@ -159,13 +159,14 @@ def _docker_command(instance: Instance, job_dir: Path, name: str, *, calibrate: 
     evidence = instance.state / "send" / "evidence"
     headers.mkdir(parents=True, exist_ok=True, mode=0o700)
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
-    instance.give_to_owner(headers, recursive=True)
-    instance.give_to_owner(evidence, recursive=True)
+    instance.give_to_owner(headers, recursive=False)
+    instance.give_to_owner(evidence, recursive=False)
     instance.give_to_owner(job_dir, recursive=True)
+    cpus = str(min(max(int(os.cpu_count() or 1), 1), int(send.get("cpus", 2))))
     command = ["docker", "run", "--rm", "--pull", "never", "--name", name,
                "--network", instance.worker_network(), "--read-only", "--user", f"{uid}:{gid}",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-               "--memory", f"{int(send.get('memory_mb', 768))}m", "--cpus", "1",
+               "--memory", f"{int(send.get('memory_mb', 768))}m", "--cpus", cpus,
                "--tmpfs", f"/tmp:rw,nosuid,nodev,size={int(send.get('tmpfs_mb', 384))}m,mode=0700,uid={uid},gid={gid}",
                "--env", "PYTHONPATH=/app", "--env", "TZ=UTC"]
     mounts = [(instance.gui, "/config", True), (instance.keys_file, "/keys/all_keys.json", True),

@@ -1,6 +1,14 @@
 # 更新日志
 
-## 未发布
+## v1.1.0
+
+### 性能优化与可靠性修复
+
+- `fetch-originals` 支持容器模式（`--container` 或 `export.runner: "container"` 时自动进入工具镜像调用 C 扩展 AES，不再在无 `PyCryptodome` 的宿主回退纯 Python 解密）；支持 `originals.network`（默认 `bridge`）和 `originals.max_attempts`（默认 5）。
+- `fetch-originals` 在单轮内按分片缓存已解密数据库，不再每张图片重复解密与校验；下载与 CDN 请求移出 `export.lock`，提交阶段重新合并最新 `cursors.json` 并保留所有者权限，避免阻塞定时增量 `export`；失败项按指数退避（300 秒起、上限 6 小时）并超过最大次数或有效期后自动清理。
+- `wechat-send` 回执确认引入 `ShardCache`：主库未变时复用明文基础库并仅增量应用 WAL 帧、主库与 WAL 均未变时直接跳过拷贝与解密，轮询间隔降至 0.5 秒；WAL 解密对同页帧去重，SQLCipher 内部复用 HMAC 上下文；宿主机发送前不再对历史 `evidence/` 目录做递归 `chown`，发送容器默认可用最多 2 核（`send.cpus`）。
+
+### 头像更新（合并自未发布变更）
 
 - 头像及时更新：每次导出都比对最新链接和本地 `update_time`，谁新用谁（本地旧缓存不再盖住新链接）；换了头像优先下载，下载成功前用旧头像。新增 `refresh-avatars --ids-file`：日报生成前重新下载指定成员，失败的继续用旧头像。
 - 头像自动下载：`head_image.db` 里没有的成员，按联系人库的头像链接下载（`export.avatar_download`，默认开）。只访问微信头像域名，限速，失败按小时翻倍退避，最长 7 天；容器模式下单独起容器，只挂导出目录，不影响导出结果。新增 `fetch-avatars`。

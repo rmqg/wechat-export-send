@@ -76,3 +76,87 @@ def test_disabled_by_default(tmp_path, monkeypatch):
     monkeypatch.setenv("WES_HOME", str(tmp_path / "home"))
     with pytest.raises(RuntimeError):
         originals.fetch_pending(Instance.load("main"))
+
+
+def test_fetch_pending_caches_shard_decrypt_preserves_concurrent_cursors_and_backs_off(tmp_path, monkeypatch):
+    from wechat_export_send import cli, sqlcipher, synthetic
+    from wechat_export_send.config import Instance
+
+    home = tmp_path / "instances"
+    directory = home / "main"
+    directory.mkdir(parents=True)
+    synthetic.build_account(directory)
+    (directory / "config.json").write_text(json.dumps({
+        "instance": "main",
+        "originals": {"enabled": True, "max_attempts": 3},
+    }), encoding="utf-8")
+    monkeypatch.setenv("WES_HOME", str(home))
+    inst = Instance.load("main")
+    inst.export_root.mkdir(parents=True, exist_ok=True)
+    conv_file = inst.export_root / "conversations" / "g_1.jsonl"
+    conv_file.parent.mkdir(parents=True, exist_ok=True)
+    conv_file.write_text("", encoding="utf-8")
+
+    now = int(time.time())
+    state_dir = inst.state / "export"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    cursors_path = state_dir / "cursors.json"
+    entry1 = {"message": {"id": "m1", "ts": now}, "shard": "message/message_0.db", "local_id": 1}
+    entry2 = {"message": {"id": "m2", "ts": now}, "shard": "message/message_0.db", "local_id": 2}
+    entry_concurrent = {"message": {"id": "m3", "ts": now}, "shard": "message/message_0.db", "local_id": 3}
+    cursors_path.write_text(json.dumps({
+        "shards": {},
+        "conversations": {"g_1": {"file": "conversations/g_1.jsonl", "pending": [entry1, entry2]}},
+    }), encoding="utf-8")
+
+    decrypt_calls = 0
+    real_snapshot = sqlcipher.decrypted_snapshot
+
+    def counting_snapshot(source, key_info, target, **kwargs):
+        nonlocal decrypt_calls
+        decrypt_calls += 1
+        return real_snapshot(source, key_info, target, **kwargs)
+
+    monkeypatch.setattr(sqlcipher, "decrypted_snapshot", counting_snapshot)
+
+    def fake_fetch(instance, storage, connection, tables, entry, routes, config, deadline):
+        # 模拟下载期间 export 进程推进了 cursors 并新增了 pending 项
+        cur = json.loads(cursors_path.read_text(encoding="utf-8"))
+        pending = cur["conversations"]["g_1"]["pending"]
+        if not any(item["message"]["id"] == "m3" for item in pending):
+            pending.append(entry_concurrent)
+            cursors_path.write_text(json.dumps(cur), encoding="utf-8")
+        if entry["message"]["id"] == "m2":
+            raise RuntimeError("transient cdn failure")
+        return {**entry["message"], "media": [{"kind": "image", "status": "ready"}]}
+
+    monkeypatch.setattr(originals, "_fetch_one_from_connection", fake_fetch)
+
+    stats = originals.fetch_pending(inst)
+    assert decrypt_calls == 1
+    assert stats == {"requested": 2, "fetched": 1, "failed": 1, "expired": 0}
+    updated = json.loads(cursors_path.read_text(encoding="utf-8"))
+    remaining = updated["conversations"]["g_1"]["pending"]
+    assert [item["message"]["id"] for item in remaining] == ["m2", "m3"]
+    assert remaining[0]["attempts"] == 1
+    assert remaining[0]["next_retry_at"] >= now + 250
+    lines = [json.loads(line) for line in conv_file.read_text(encoding="utf-8").splitlines()]
+    assert [line["id"] for line in lines] == ["m1"]
+
+    # 容器模式下 fetch-originals 走 run_in_tools 且开启 bridge 网络
+    (directory / "config.json").write_text(json.dumps({
+        "instance": "main",
+        "export": {"runner": "container"},
+        "originals": {"enabled": True},
+    }), encoding="utf-8")
+    captured = {}
+
+    def fake_run_in_tools(instance, arguments, stdout=None, *, network="none"):
+        captured["arguments"] = arguments
+        captured["network"] = network
+        return 0
+
+    monkeypatch.setattr(cli, "run_in_tools", fake_run_in_tools)
+    assert cli.main(["fetch-originals", "--instance", "main", "--limit", "15"]) == 0
+    assert captured["network"] == "bridge"
+    assert captured["arguments"] == ["fetch-originals", "--instance", "main", "--in-process", "--limit", "15"]

@@ -119,13 +119,141 @@ def query_rows(database: Path, table: str, floor: int | None, start_epoch: int |
         connection.close()
 
 
+class _CachedShard:
+    def __init__(self, main_sig, wal_sig, base_plain: Path, salt_file: Path, enc_key: bytes):
+        self.main_sig = main_sig
+        self.wal_sig = wal_sig
+        self.base_plain = base_plain
+        self.salt_file = salt_file
+        self.enc_key = enc_key
+
+
+class ShardCache:
+    """复用未变化的主库解密副本，仅增量重解 WAL 并跳过未变更分片。"""
+
+    def __init__(self, temp: Path):
+        self.temp = Path(temp)
+        self.temp.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.entries: dict[str, _CachedShard] = {}
+
+    def _snapshot_work_db(self, src: Path, relative: str, key_info: dict, *, skip_if_unchanged: bool) -> Path | None:
+        src_wal = Path(str(src) + "-wal")
+        cur_main = sqlcipher._signature(src)
+        cur_wal = sqlcipher._signature(src_wal)
+        cached = self.entries.get(relative)
+        if skip_if_unchanged and cached is not None and (cur_main, cur_wal) == (cached.main_sig, cached.wal_sig):
+            return None
+
+        stem = hashlib.sha256(relative.encode()).hexdigest()
+        work_db = self.temp / f"{stem}.work.db"
+        wal_copy = self.temp / f"{stem}.work.db-wal"
+
+        if cached is not None and cur_main is not None and cur_main == cached.main_sig:
+            stable = False
+            for _ in range(3):
+                before = (sqlcipher._signature(src), sqlcipher._signature(src_wal))
+                if before[0] != cached.main_sig:
+                    break
+                if before[1] is not None:
+                    shutil.copyfile(src_wal, wal_copy)
+                    wal_copy.chmod(0o600)
+                else:
+                    wal_copy.unlink(missing_ok=True)
+                if before == (sqlcipher._signature(src), sqlcipher._signature(src_wal)):
+                    cur_wal = before[1]
+                    stable = True
+                    break
+            if stable:
+                try:
+                    shutil.copyfile(cached.base_plain, work_db)
+                    work_db.chmod(0o600)
+                    if cur_wal is not None:
+                        sqlcipher.patch_wal(wal_copy, work_db, cached.enc_key, source=cached.salt_file)
+                    cached.wal_sig = cur_wal
+                    return work_db
+                except Exception:
+                    work_db.unlink(missing_ok=True)
+                    self.entries.pop(relative, None)
+                finally:
+                    wal_copy.unlink(missing_ok=True)
+
+        enc_copy = self.temp / f"{stem}.encrypted"
+        base_plain = self.temp / f"{stem}.base.db"
+        salt_file = self.temp / f"{stem}.salt"
+        stable = False
+        before = (None, None)
+        for _ in range(3):
+            before = (sqlcipher._signature(src), sqlcipher._signature(src_wal))
+            if before[0] is None:
+                raise RuntimeError(f"source database disappeared during snapshot: {src.name}")
+            shutil.copyfile(src, enc_copy)
+            enc_copy.chmod(0o600)
+            if before[1] is not None:
+                shutil.copyfile(src_wal, wal_copy)
+                wal_copy.chmod(0o600)
+            else:
+                wal_copy.unlink(missing_ok=True)
+            if before == (sqlcipher._signature(src), sqlcipher._signature(src_wal)):
+                stable = True
+                break
+        if not stable:
+            enc_copy.unlink(missing_ok=True)
+            wal_copy.unlink(missing_ok=True)
+            raise RuntimeError(f"source database changed during all snapshot attempts: {src.name}")
+
+        try:
+            enc_key = bytes.fromhex(key_info["enc_key"])
+            with enc_copy.open("rb") as inp:
+                salt = inp.read(16)
+            salt_file.write_bytes(salt)
+            salt_file.chmod(0o600)
+            sqlcipher.full_decrypt(enc_copy, base_plain, enc_key)
+            shutil.copyfile(base_plain, work_db)
+            work_db.chmod(0o600)
+            if before[1] is not None:
+                sqlcipher.patch_wal(wal_copy, work_db, enc_key, source=salt_file)
+            self.entries[relative] = _CachedShard(before[0], before[1], base_plain, salt_file, enc_key)
+            return work_db
+        except Exception:
+            work_db.unlink(missing_ok=True)
+            base_plain.unlink(missing_ok=True)
+            salt_file.unlink(missing_ok=True)
+            self.entries.pop(relative, None)
+            raise
+        finally:
+            enc_copy.unlink(missing_ok=True)
+            wal_copy.unlink(missing_ok=True)
+
+    def query(self, root: Path, keys: dict, relative: str, table: str, floor: int | None, start_epoch: int | None,
+              *, message_type: int = 1, include_content: bool = False, skip_if_unchanged: bool = False) -> list[dict] | None:
+        work_db = self._snapshot_work_db(root / relative, relative, sqlcipher.key_for_rel(keys, relative),
+                                         skip_if_unchanged=skip_if_unchanged)
+        if work_db is None:
+            return None
+        try:
+            return query_rows(work_db, table, floor, start_epoch, message_type=message_type, include_content=include_content)
+        finally:
+            work_db.unlink(missing_ok=True)
+
+
 def scan_all(root: Path, keys: dict, shards: list[str], table: str, temp: Path,
              floors: dict | None = None, start_epoch: int | None = None,
-             *, message_type: int = 1, include_content: bool = False) -> dict[str, list[dict]]:
+             *, message_type: int = 1, include_content: bool = False,
+             cache: ShardCache | None = None, skip_if_unchanged: bool = False) -> dict[str, list[dict]]:
     result = {}
+    if cache is not None:
+        for relative in shards:
+            rows = cache.query(
+                root, keys, relative, table, None if floors is None else floors.get(relative, 0),
+                start_epoch, message_type=message_type, include_content=include_content,
+                skip_if_unchanged=skip_if_unchanged,
+            )
+            if rows is not None:
+                result[relative] = rows
+        return result
     for relative in shards:
         target = temp / (hashlib.sha256(relative.encode()).hexdigest() + ".db")
-        plain = sqlcipher.decrypted_snapshot(root / relative, sqlcipher.key_for_rel(keys, relative), target)
+        plain = sqlcipher.decrypted_snapshot(root / relative, sqlcipher.key_for_rel(keys, relative), target, verify=False)
         try:
             result[relative] = query_rows(plain, table, None if floors is None else floors.get(relative, 0),
                                           start_epoch, message_type=message_type, include_content=include_content)
@@ -256,7 +384,7 @@ def run_job(job_dir: Path) -> dict:
             raise StageError("no_contact_key", "没有联系人库的密钥；先运行 keys capture")
 
         progress.set("resolve_target")
-        contact_plain = sqlcipher.decrypted_snapshot(root / "contact/contact.db", contact_info, temp / "contact.db")
+        contact_plain = sqlcipher.decrypted_snapshot(root / "contact/contact.db", contact_info, temp / "contact.db", verify=False)
         contacts = wcdb.load_contacts(contact_plain)
         contact_plain.unlink(missing_ok=True)
         target = resolve_target(job["to"], contacts, mapper)
@@ -318,8 +446,9 @@ def run_job(job_dir: Path) -> dict:
         evidence = Path(job["evidence_dir"]) if job.get("evidence_dir") else None
         stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
 
+        shard_cache = ShardCache(temp)
         progress.set("baseline")
-        baseline = highwaters(scan_all(root, keys, shards, table, temp))
+        baseline = highwaters(scan_all(root, keys, shards, table, temp, cache=shard_cache))
         progress.set("paste")
         if mode == "text":
             text = payload.decode("utf-8", "strict")
@@ -373,19 +502,20 @@ def run_job(job_dir: Path) -> dict:
         result["submitted_at"] = start_epoch
         display_x11.click(window, calibration["send_button"], on_submit_state=progress.submit_state)
         # ---- 从这里起可能已经发出去了：再出任何问题都只能报 unknown ----
-        time.sleep(float(calibration.get("send_settle_seconds", 1.5)))
+        time.sleep(float(calibration.get("send_settle_seconds", 0.8)))
         progress.set("confirm")
         progress.submitted = True
         deadline = time.monotonic() + confirm
         receipt = None
         while time.monotonic() < deadline:
             rows = scan_all(root, keys, shards, table, temp, baseline, start_epoch,
-                            message_type=message_type, include_content=mode == "text")
+                            message_type=message_type, include_content=mode == "text",
+                            cache=shard_cache, skip_if_unchanged=True)
             receipt = locate_new_self_text(rows, baseline, start_epoch, payload_hash) if mode == "text" else \
                 locate_new_self_image(rows, baseline, start_epoch)
             if receipt:
                 break
-            time.sleep(2.5)
+            time.sleep(0.5)
         if evidence is not None:
             try:
                 capture_private(display_x11, window, evidence / f"{stamp}-after-submit.png", redact)

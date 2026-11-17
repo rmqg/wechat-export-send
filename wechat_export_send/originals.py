@@ -10,7 +10,9 @@ import fcntl
 import hashlib
 import ipaddress
 import json
+import os
 from pathlib import Path
+import sqlite3
 import struct
 import shutil
 import tempfile
@@ -266,6 +268,13 @@ def _descriptor(attributes: dict) -> dict:
             "filetype": 1 if original else 2, "quality": "original" if original else "client_full"}
 
 
+def _lock_read_cursors(lock_path: Path, state_path: Path) -> dict:
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return json.loads(state_path.read_text(encoding="utf-8"))
+
+
 def fetch_pending(instance: Instance, *, limit: int | None = None) -> dict:
     """处理导出状态里 status=pending 的图片：下载、校验、入库，再用同一个 id 重写一行。"""
     config = instance.config["originals"]
@@ -274,63 +283,138 @@ def fetch_pending(instance: Instance, *, limit: int | None = None) -> dict:
     state_root = instance.state / "export"
     state_path = state_root / "cursors.json"
     lock_path = state_root / "export.lock"
-    stats = {"requested": 0, "fetched": 0, "failed": 0}
-    storage = instance.db_storage()
-    keys = sqlcipher.load_keys(instance.keys_file)
-    deadline = time.monotonic() + int(config["timeout_seconds"])
-    with lock_path.open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        state = json.loads(state_path.read_text(encoding="utf-8"))
+    state = _lock_read_cursors(lock_path, state_path)
+
+    now = int(time.time())
+    pending_days = int(instance.config["export"].get("media", {}).get("pending_days") or 7)
+    max_attempts = max(1, int(config.get("max_attempts") or 5))
+    expired_keys: set[tuple[str, str]] = set()
+    eligible: list[tuple[int, int, str, dict]] = []
+    for conversation_id, conversation in state.get("conversations", {}).items():
+        for entry in conversation.get("pending", []):
+            msg = entry.get("message") or {}
+            msg_id = str(msg.get("id") or "")
+            ts = int(msg.get("ts") or 0)
+            attempts = int(entry.get("attempts") or 0)
+            if (pending_days > 0 and ts and ts < now - pending_days * 86400) or attempts >= max_attempts:
+                expired_keys.add((conversation_id, msg_id))
+                continue
+            if now >= int(entry.get("next_retry_at") or 0):
+                eligible.append((attempts, -ts, conversation_id, entry))
+    eligible.sort(key=lambda item: (item[0], item[1]))
+    max_items = int(limit or config["max_per_run"])
+    eligible = eligible[:max_items]
+
+    stats = {"requested": 0, "fetched": 0, "failed": 0, "expired": len(expired_keys)}
+    if not eligible and not expired_keys:
+        return stats
+
+    fetched_by_conv: dict[str, dict[str, dict]] = {}
+    retry_updates: dict[tuple[str, str], dict] = {}
+    if eligible:
+        storage = instance.db_storage()
+        keys = sqlcipher.load_keys(instance.keys_file)
+        deadline = time.monotonic() + max(5, int(config["timeout_seconds"]) - 10)
         temp = Path(tempfile.mkdtemp(prefix="originals-", dir=instance.state))
+        shard_cache: dict[str, tuple[sqlite3.Connection, list[str]]] = {}
         routes: dict[int, dict] = {}
-        remaining = int(limit or config["max_per_run"])
         try:
-            for conversation_id, conversation in state["conversations"].items():
+            for _, _, conversation_id, entry in eligible:
+                if time.monotonic() >= deadline:
+                    break
+                stats["requested"] += 1
+                msg_id = str(entry.get("message", {}).get("id") or "")
+                relative = entry["shard"]
+                try:
+                    cached = shard_cache.get(relative)
+                    if cached is None:
+                        key_info = sqlcipher.key_for_rel(keys, relative)
+                        if not key_info:
+                            raise RuntimeError(f"missing database key for {relative}")
+                        plain = sqlcipher.decrypted_snapshot(
+                            storage / relative,
+                            key_info,
+                            temp / (hashlib.sha256(relative.encode()).hexdigest() + ".db"),
+                            verify=False,
+                        )
+                        connection = wcdb.open_ro(plain)
+                        tables = [t for t in wcdb.table_names(connection) if t.startswith("Msg_")]
+                        cached = shard_cache[relative] = (connection, tables)
+                    connection, tables = cached
+                    message = _fetch_one_from_connection(
+                        instance, storage, connection, tables, entry, routes, config, deadline
+                    )
+                except Exception:
+                    stats["failed"] += 1
+                    attempts = int(entry.get("attempts") or 0) + 1
+                    if attempts >= max_attempts:
+                        expired_keys.add((conversation_id, msg_id))
+                        stats["expired"] += 1
+                    else:
+                        delay = min(300 * (2 ** (attempts - 1)), 21600)
+                        retry_updates[(conversation_id, msg_id)] = {
+                            "attempts": attempts,
+                            "next_retry_at": int(time.time()) + delay,
+                        }
+                    continue
+                stats["fetched"] += 1
+                fetched_by_conv.setdefault(conversation_id, {})[msg_id] = message
+        finally:
+            for connection, _ in shard_cache.values():
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            shutil.rmtree(temp, ignore_errors=True)
+
+    if fetched_by_conv or retry_updates or expired_keys:
+        with lock_path.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            latest_state = json.loads(state_path.read_text(encoding="utf-8"))
+            for conversation_id, conversation in latest_state.get("conversations", {}).items():
+                conv_fetched = fetched_by_conv.get(conversation_id, {})
                 keep = []
                 out_lines = []
                 for entry in conversation.get("pending", []):
-                    if remaining <= 0 or time.monotonic() >= deadline:
-                        keep.append(entry)
+                    msg_id = str(entry.get("message", {}).get("id") or "")
+                    key = (conversation_id, msg_id)
+                    if msg_id in conv_fetched:
+                        out_lines.append(
+                            json.dumps(conv_fetched[msg_id], ensure_ascii=False, separators=(",", ":")) + "\n"
+                        )
                         continue
-                    remaining -= 1
-                    stats["requested"] += 1
-                    try:
-                        message = _fetch_one(instance, storage, keys, entry, routes, config, deadline, temp)
-                    except Exception:
-                        stats["failed"] += 1
-                        keep.append(entry)
+                    if key in expired_keys:
                         continue
-                    stats["fetched"] += 1
-                    out_lines.append(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    if key in retry_updates:
+                        entry = {**entry, **retry_updates[key]}
+                    keep.append(entry)
                 conversation["pending"] = keep
                 if out_lines:
                     path = instance.export_root / conversation["file"]
                     with path.open("a", encoding="utf-8") as stream:
                         stream.write("".join(out_lines))
                         stream.flush()
-            atomic_write(state_path, json.dumps(state, ensure_ascii=False, separators=(",", ":")))
-        finally:
-            shutil.rmtree(temp, ignore_errors=True)
+                        os.fsync(stream.fileno())
+                    instance.give_to_owner(path)
+            atomic_write(state_path, json.dumps(latest_state, ensure_ascii=False, separators=(",", ":")))
+            # Host cron runs fetch-originals as root, while export runs as the
+            # instance UID in a container. mkstemp+replace creates a root-owned
+            # 0600 inode: return it to the configured owner before releasing
+            # export.lock, otherwise the next incremental export cannot read it.
+            instance.give_to_owner(state_path)
     return stats
 
 
-def _fetch_one(instance, storage, keys, entry, routes, config, deadline, temp) -> dict:
-    relative = entry["shard"]
-    plain = sqlcipher.decrypted_snapshot(storage / relative, sqlcipher.key_for_rel(keys, relative), temp / hashlib.sha256(relative.encode()).hexdigest())
-    try:
-        connection = wcdb.open_ro(plain)
-        try:
-            row = None
-            for table in wcdb.table_names(connection):
-                if table.startswith("Msg_"):
-                    found = connection.execute(f'SELECT message_content, WCDB_CT_message_content, server_id FROM "{table}" WHERE local_id=?', (entry["local_id"],)).fetchone()
-                    if found is not None and str(found["server_id"]) == entry["message"]["id"]:
-                        row = dict(found)
-                        break
-        finally:
-            connection.close()
-    finally:
-        plain.unlink(missing_ok=True)
+def _fetch_one_from_connection(instance, storage, connection, msg_tables, entry, routes, config, deadline) -> dict:
+    row = None
+    for table in msg_tables:
+        found = connection.execute(
+            f'SELECT message_content, WCDB_CT_message_content, server_id FROM "{table}" WHERE local_id=?',
+            (entry["local_id"],),
+        ).fetchone()
+        if found is not None and str(found["server_id"]) == entry["message"]["id"]:
+            row = dict(found)
+            break
     if row is None:
         raise ValueError("message row disappeared")
     body = wcdb.decompress_content(row["message_content"], row["WCDB_CT_message_content"])
@@ -344,8 +428,25 @@ def _fetch_one(instance, storage, keys, entry, routes, config, deadline, temp) -
     if fmt not in media.MIME_TYPES:
         raise ValueError("Downloaded image format is not supported")
     relative_path, digest = media.store_content(instance.export_root, raw, media.EXTENSIONS.get(fmt, fmt))
-    message = entry["message"]
+    message = dict(entry["message"])
     message["media"] = [{"kind": "image", "path": relative_path, "sha256": digest, "mime": media.MIME_TYPES[fmt], "bytes": len(raw),
                          "status": "ready", "is_thumbnail": False, "source_quality": descriptor["quality"],
                          "md5_verified": transfer["original_md5_matches"]}]
     return message
+
+
+def _fetch_one(instance, storage, keys, entry, routes, config, deadline, temp) -> dict:
+    relative = entry["shard"]
+    plain = sqlcipher.decrypted_snapshot(
+        storage / relative, sqlcipher.key_for_rel(keys, relative),
+        temp / hashlib.sha256(relative.encode()).hexdigest(), verify=False,
+    )
+    try:
+        connection = wcdb.open_ro(plain)
+        try:
+            tables = [t for t in wcdb.table_names(connection) if t.startswith("Msg_")]
+            return _fetch_one_from_connection(instance, storage, connection, tables, entry, routes, config, deadline)
+        finally:
+            connection.close()
+    finally:
+        plain.unlink(missing_ok=True)

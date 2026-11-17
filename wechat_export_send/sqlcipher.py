@@ -56,13 +56,17 @@ def _keys(enc_key: bytes, salt: bytes) -> tuple[bytes, bytes]:
     return enc_key, hashlib.pbkdf2_hmac("sha512", enc_key, mac_salt, 2, 32)
 
 
-def _decrypt_page(page: bytes, number: int, enc: bytes, mac: bytes) -> bytes:
+def _decrypt_page(page: bytes, number: int, enc: bytes, mac: bytes, *, base_mac=None) -> bytes:
     if len(page) != PAGE_SIZE:
         raise ValueError("short encrypted page")
     reserve = page[-RESERVE:]
     ciphertext = page[16:-RESERVE] if number == 1 else page[:-RESERVE]
     iv, tag = reserve[:16], reserve[16:]
-    expected = hmac.new(mac, ciphertext + iv + struct.pack("<I", number), hashlib.sha512).digest()
+    mac_ctx = base_mac.copy() if base_mac is not None else hmac.new(mac, digestmod=hashlib.sha512)
+    mac_ctx.update(ciphertext)
+    mac_ctx.update(iv)
+    mac_ctx.update(struct.pack("<I", number))
+    expected = mac_ctx.digest()
     if not hmac.compare_digest(tag, expected):
         raise ValueError(f"SQLCipher page {number} authentication failed")
     plain = _cbc_decrypt(enc, iv, ciphertext)
@@ -79,6 +83,7 @@ def full_decrypt(source: Path, target: Path, key: bytes) -> int:
         if len(salt) != 16:
             raise ValueError("encrypted database is too short")
         enc, mac = _keys(bytes(key), salt)
+        base_mac = hmac.new(mac, digestmod=hashlib.sha512)
         first = inp.read(PAGE_SIZE - 16)
         if len(first) != PAGE_SIZE - 16:
             raise ValueError("encrypted database has a partial page")
@@ -88,7 +93,7 @@ def full_decrypt(source: Path, target: Path, key: bytes) -> int:
         try:
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "wb") as out:
-                out.write(_decrypt_page(salt + first, 1, enc, mac))
+                out.write(_decrypt_page(salt + first, 1, enc, mac, base_mac=base_mac))
                 pages = 1
                 empty = bytes(PAGE_SIZE)
                 skipped = 0
@@ -107,7 +112,7 @@ def full_decrypt(source: Path, target: Path, key: bytes) -> int:
                     if skipped:
                         raise ValueError(f"SQLCipher page {pages + skipped + 1} follows empty pages")
                     pages += 1
-                    out.write(_decrypt_page(page, pages, enc, mac))
+                    out.write(_decrypt_page(page, pages, enc, mac, base_mac=base_mac))
                 out.flush()
                 os.fsync(out.fileno())
             os.replace(temporary, target)
@@ -165,7 +170,9 @@ def patch_wal(wal: Path, target: Path, key: bytes, source: Path | None = None) -
         pos += 24 + PAGE_SIZE
     if not committed:
         return 0
-    updates = {pg: _decrypt_page(frame, pg, enc, mac) for pg, _, frame in frames[:committed]}
+    base_mac = hmac.new(mac, digestmod=hashlib.sha512)
+    latest_frames = {pg: frame for pg, _, frame in frames[:committed]}
+    updates = {pg: _decrypt_page(frame, pg, enc, mac, base_mac=base_mac) for pg, frame in latest_frames.items()}
     db_size = frames[committed - 1][1] * PAGE_SIZE
     target = Path(target)
     fd, temporary = tempfile.mkstemp(prefix=".wal-patch-", dir=target.parent)
@@ -281,7 +288,18 @@ def snapshot_signature(source: Path) -> list:
     return [list(item) if item else None for item in (_signature(Path(source)), _signature(Path(str(source) + "-wal")))]
 
 
-def decrypted_snapshot(source: Path, key_info: dict, target: Path) -> Path:
+def _verify_header_pages(target: Path) -> bool:
+    with target.open("rb") as stream:
+        header = stream.read(32)
+    if len(header) < 32 or not header.startswith(b"SQLite format 3\x00"):
+        return False
+    header_pages = struct.unpack(">I", header[28:32])[0]
+    if header_pages and target.stat().st_size < header_pages * PAGE_SIZE:
+        return False
+    return True
+
+
+def decrypted_snapshot(source: Path, key_info: dict, target: Path, *, verify: bool = True) -> Path:
     """客户端还在写时也能用：复制 DB 和 WAL，确认复制前后没变，再解密到私有目录。"""
     source, target = Path(source), Path(target)
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -311,8 +329,11 @@ def decrypted_snapshot(source: Path, key_info: dict, target: Path) -> Path:
         enc_key = bytes.fromhex(key_info["enc_key"])
         full_decrypt(encrypted_copy, target, enc_key)
         patch_wal(wal_copy, target, enc_key, source=encrypted_copy)
-        if not verify_sqlite(target):
-            raise RuntimeError(f"decrypted database failed SQLite quick_check: {source.name}")
+        if verify:
+            if not verify_sqlite(target):
+                raise RuntimeError(f"decrypted database failed SQLite quick_check: {source.name}")
+        elif not _verify_header_pages(target):
+            raise RuntimeError(f"decrypted database failed SQLite header check: {source.name}")
     except Exception:
         target.unlink(missing_ok=True)
         raise

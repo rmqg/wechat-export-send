@@ -50,8 +50,10 @@ DEFAULTS: dict = {
         "evidence": True,
         "memory_mb": 768,
         "tmpfs_mb": 384,
+        "cpus": 2,
     },
-    "originals": {"enabled": False, "client_version_code": -227271398, "max_per_run": 50, "timeout_seconds": 600},
+    "originals": {"enabled": False, "client_version_code": -227271398, "max_per_run": 50,
+                  "timeout_seconds": 600, "network": "bridge", "max_attempts": 5},
     "media_origin": {"enabled": False, "port": 8099, "token": ""},
     "watchdog": {"bark_url": "", "group": "wechat", "fail_level": "timeSensitive", "recovery_level": "active"},
 }

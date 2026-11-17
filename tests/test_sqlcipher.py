@@ -171,3 +171,62 @@ def test_aes_fallback_modes_match_pycryptodome():
     assert aes_fallback.cbc_encrypt(key, iv, data) == Crypto.new(key, Crypto.MODE_CBC, iv).encrypt(data)
     assert aes_fallback.cbc_decrypt(key, iv, data) == Crypto.new(key, Crypto.MODE_CBC, iv).decrypt(data)
     assert aes_fallback.cfb128_decrypt(key, iv, data[:37]) == Crypto.new(key, Crypto.MODE_CFB, iv=iv, segment_size=128).decrypt(data[:37])
+
+
+def test_shard_cache_skips_unchanged_and_reuses_base_for_wal_only_updates(tmp_path, monkeypatch):
+    from wechat_export_send import synthetic
+    from wechat_export_send.send import worker
+
+    plain = tmp_path / "plain.db"
+    synthetic.reserved_sqlite(plain, [
+        "CREATE TABLE Msg_abc (local_id INTEGER PRIMARY KEY, server_id INTEGER, local_type INTEGER, create_time INTEGER, origin_source INTEGER)",
+        "INSERT INTO Msg_abc VALUES (1, 101, 1, 1000, 1)",
+    ])
+    salt = bytes(range(16))
+    key = sqlcipher.derive_enc_key(b"PUBLIC-TEST", salt)
+    root = tmp_path / "db_storage"
+    (root / "message").mkdir(parents=True)
+    enc_db = root / "message" / "message_0.db"
+    sqlcipher.encrypt_sqlite(plain, enc_db, key, salt=salt)
+    keys = {"message/message_0.db": {"enc_key": key.hex()}}
+
+    decrypt_calls = 0
+    real_full = sqlcipher.full_decrypt
+
+    def counting_full(source, target, enc_key):
+        nonlocal decrypt_calls
+        decrypt_calls += 1
+        return real_full(source, target, enc_key)
+
+    monkeypatch.setattr(sqlcipher, "full_decrypt", counting_full)
+    cache = worker.ShardCache(tmp_path / "cache")
+
+    rows = cache.query(root, keys, "message/message_0.db", "Msg_abc", None, None)
+    assert rows == [{"local_id": 1}]
+    assert decrypt_calls == 1
+
+    # 未变化时跳过复制与解密
+    assert cache.query(root, keys, "message/message_0.db", "Msg_abc", 1, 900, skip_if_unchanged=True) is None
+    assert decrypt_calls == 1
+
+    # 仅 WAL 变化时复用主库明文副本，不再调用 full_decrypt
+    base_plain = bytearray(cache.entries["message/message_0.db"].base_plain.read_bytes())
+    page_two = bytes(base_plain[sqlcipher.PAGE_SIZE:2 * sqlcipher.PAGE_SIZE])
+    wal = _wal(root / "message", enc_db, key, salt, 2, page_two, commit=True)
+    assert wal.exists()
+    rows_after_wal = cache.query(root, keys, "message/message_0.db", "Msg_abc", 0, 900, skip_if_unchanged=True)
+    assert rows_after_wal is not None and len(rows_after_wal) == 1
+    assert decrypt_calls == 1
+
+    # 主库本身变化时重新执行 full_decrypt
+    plain2 = tmp_path / "plain2.db"
+    synthetic.reserved_sqlite(plain2, [
+        "CREATE TABLE Msg_abc (local_id INTEGER PRIMARY KEY, server_id INTEGER, local_type INTEGER, create_time INTEGER, origin_source INTEGER)",
+        "INSERT INTO Msg_abc VALUES (1, 101, 1, 1000, 1)",
+        "INSERT INTO Msg_abc VALUES (2, 102, 1, 1005, 1)",
+    ])
+    wal.unlink()
+    sqlcipher.encrypt_sqlite(plain2, enc_db, key, salt=salt)
+    rows_after_main = cache.query(root, keys, "message/message_0.db", "Msg_abc", 1, 900, skip_if_unchanged=True)
+    assert [r["local_id"] for r in rows_after_main] == [2]
+    assert decrypt_calls == 2

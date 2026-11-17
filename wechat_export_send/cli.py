@@ -135,8 +135,8 @@ def instance_attach(args) -> int:
     return 0
 
 
-def run_in_tools(instance: Instance, arguments: list[str], stdout=None) -> int:
-    """在工具镜像里跑一次导出类任务：无网络、内存有上限。宿主没有依赖或者内存紧时用它。"""
+def run_in_tools(instance: Instance, arguments: list[str], stdout=None, *, network: str = "none") -> int:
+    """在工具镜像里跑一次导出类任务：无网络（或按需指定网络）、内存有上限。宿主没有依赖或者内存紧时用它。"""
     export = instance.config["export"]
     uid, gid = instance.owner()
     home = str(instances_root())
@@ -144,9 +144,10 @@ def run_in_tools(instance: Instance, arguments: list[str], stdout=None) -> int:
     if not state.exists():
         state.mkdir(parents=True, exist_ok=True, mode=0o700)
         instance.give_to_owner(state)
-    command = ["docker", "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
+    cpus = str(min(max(int(os.cpu_count() or 1), 1), 2))
+    command = ["docker", "run", "--rm", "--pull", "never", "--network", network, "--read-only",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-               "--memory", f"{int(export['container_memory_mb'])}m", "--cpus", "1", "--user", f"{uid}:{gid}",
+               "--memory", f"{int(export['container_memory_mb'])}m", "--cpus", cpus, "--user", f"{uid}:{gid}",
                "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m", "--env", "PYTHONPATH=/app", "--env", f"WES_HOME={home}",
                "--env", f"SQLITE_TMPDIR={state}", "--env", "TZ=UTC",
                "--mount", f"type=bind,src={instance.dir},dst={instance.dir}"]
@@ -459,8 +460,14 @@ def conversations(args) -> int:
 
 
 def fetch_originals(args) -> int:
+    instance = Instance.load(args.instance)
+    if not getattr(args, "in_process", False) and (getattr(args, "container", False) or instance.config["export"]["runner"] == "container"):
+        arguments = ["fetch-originals", "--instance", instance.name, "--in-process"]
+        if args.limit is not None:
+            arguments += ["--limit", str(args.limit)]
+        return run_in_tools(instance, arguments, network=str(instance.config["originals"].get("network") or "bridge"))
     from . import originals
-    _print_json(originals.fetch_pending(Instance.load(args.instance), limit=args.limit))
+    _print_json(originals.fetch_pending(instance, limit=args.limit))
     return 0
 
 
@@ -609,6 +616,8 @@ def build_parser() -> argparse.ArgumentParser:
     item = sub.add_parser("fetch-originals", help="可选：从腾讯 CDN 下载 pending 的原图（默认关闭）")
     item.add_argument("--instance", required=True)
     item.add_argument("--limit", type=int)
+    item.add_argument("--container", action="store_true", help="在工具容器里跑（宿主没装 PyCryptodome 时自动使用）")
+    item.add_argument("--in-process", action="store_true", help=argparse.SUPPRESS)
     item.set_defaults(func=fetch_originals)
 
     item = sub.add_parser("serve-media", help="可选：在 127.0.0.1 上凭 token 提供导出的媒体文件")
